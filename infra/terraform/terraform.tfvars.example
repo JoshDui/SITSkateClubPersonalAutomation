@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and uncomment + fill in values.
+# terraform.tfvars is gitignored — do not commit real values.
+
+# env                = "prod"
+# aws_region         = "ap-southeast-1"
+# budget_alert_email = "your.school.email@singaporetech.edu.sg"
+
+# Override if you need tighter/looser Lambda config:
+# lambda_memory_mb       = 512
+# lambda_timeout_seconds = 30
+# log_retention_days     = 14
+
+# Override for testing the cron at a different time:
+# weekly_poll_cron_utc = "cron(0 10 ? * SUN *)"
