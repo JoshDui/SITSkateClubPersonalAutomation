@@ -1,0 +1,8 @@
+azure-functions
+azure-data-tables
+azure-keyvault-secrets
+azure-identity
+azure-storage-queue
+httpx
+openpyxl
+python-ulid
