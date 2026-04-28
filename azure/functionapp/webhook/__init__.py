@@ -131,9 +131,15 @@ def _cmd_sendpoll(msg: dict, args: list[str]) -> None:
     _send_poll(session_id)
     _enqueue_export(session_id)
 
+    # Confirmation lands in the same topic as the poll when /sendpoll was
+    # invoked from the configured group. If invoked from a DM, reply in the
+    # DM as before — Telegram rejects message_thread_id outside supergroups.
+    chat_id = msg["chat"]["id"]
+    in_group = chat_id == config.group_chat_id()
     telegram.send_message(
-        msg["chat"]["id"],
+        chat_id,
         f"✅ Poll sent for session on {session_date}. (Session ID: {session_id})",
+        message_thread_id=config.group_topic_id() if in_group else None,
     )
 
 
