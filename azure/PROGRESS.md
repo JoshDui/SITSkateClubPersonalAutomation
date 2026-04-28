@@ -191,18 +191,37 @@ Status `3221225477` is `0xC0000005` — Windows access violation. This is the sa
 **Workaround:** Use the Azure Portal Logs blade (see error #9 fix). The portal-based KQL editor and Live Metrics work identically and require no extension install.
 **Possible root cause** (not investigated): Antivirus interference, corrupted Azure CLI install, or a Python wheel incompatible with this exact Windows build (10.0.26200). Reinstalling Azure CLI may help if a CLI-only workflow is needed later.
 
+### 14. App Insights ingestion lag when debugging
+**Symptom:** KQL query returns "No results found" immediately after a webhook failure.
+**Cause:** Linux Consumption Functions batch-flush telemetry every ~30s + Microsoft's ingestion pipeline adds another 30–60s delay. A query within 60s of the request will legitimately show nothing.
+**Fix:** Wait 60–90s after firing the test before running the KQL query. Or use Live Metrics (Application Insights → Live Metrics) which has ~1s latency but doesn't persist data — good for confirming a request landed, not for inspecting tracebacks.
+
+### 15. Cosmos `id` fix did not unblock the smoke test (root cause TBD)
+**Symptom:** After commit `dcf73fc` (the `id` reserved-property fix), the webhook still returns `200 error-logged` on `/sendpoll`. A subsequent exception is being thrown but its trace was not yet captured.
+**Status:** Open as of 2026-04-28. Likely candidates (none confirmed):
+- `_send_poll` → Telegram bot can't post to the group (bot not added, or `group-chat-id` wrong)
+- `_enqueue_export` → Storage Queue Data Contributor role missing on the System-Assigned MI
+- `db.set_poll_message_id` → another Cosmos schema constraint (e.g. integer field type)
+- Another `_entity_to_dict` issue that the prior crash masked
+**Diagnostic step:** Run this KQL to see which trace is the *last* successful one before the exception — that pinpoints the failing step:
+```kql
+union exceptions, traces
+| where timestamp > ago(10m)
+| order by timestamp asc
+| project timestamp, severityLevel, message, outerMessage=column_ifexists("outerMessage",""), details=column_ifexists("details","")
+```
+
 ---
 
 ## Current Blocker
 
-After the Cosmos `id` fix (commit `dcf73fc`), redeployed and re-ran the simulated `/sendpoll`:
-```
-Status: 200, Body: error-logged
-```
+**See error #15** — the `id` fix didn't unblock; webhook still returns `200 error-logged`. The next exception's trace has not been captured yet (App Insights queries kept hitting the ingestion-lag issue, see #14).
 
-The webhook handler's outer `except` always returns 200 with body `error-logged` to prevent Telegram retries (which compound failures). The actual exception is in App Insights but **has not yet been inspected** post-`id`-fix.
-
-**Next action when resuming:** Run the App Insights query (error #9 above) to get the new exception. Likely candidates: a different Cosmos schema constraint, a missing app setting, or a bug in `_entity_to_dict` that the prior crash masked.
+**Concrete next action when resuming:**
+1. Re-fire the smoke test (PowerShell block in "Resume Cold" step 4 below)
+2. Wait 60–90s
+3. Run the diagnostic KQL from error #15 in the Azure Portal Logs blade
+4. Look at the *last `info` trace* before the exception — that's the step that succeeded; the next step is what failed
 
 ---
 
@@ -216,15 +235,15 @@ The webhook handler's outer `except` always returns 200 with body `error-logged`
    az resource list --resource-group rg-skatebot-prod --query "[].{name:name,type:type}" -o table
    ```
 
-2. **Set session variables**
+2. **Set session variables** (re-run on every new terminal — see error #10)
    ```powershell
    $RG = "rg-skatebot-prod"
    $APP_NAME = "skatebot-prod-azure-32441"
    $VAULT = "skatebot-prod-kv-29024"
    $URL = "https://$APP_NAME.azurewebsites.net/api/webhook"
    $SECRET = az keyvault secret show --vault-name $VAULT --name webhook-secret --query value -o tsv
-   $APP_ID = az monitor app-insights component show --resource-group $RG --query "[0].appId" -o tsv
    ```
+   (Don't try `az monitor app-insights component show` — extension install fails on this box, see error #13. Use the portal for App Insights queries.)
 
 3. **Inspect the latest exception** (via Azure Portal — CLI extension unavailable, see error #13)
    - Portal → `rg-skatebot-prod` → the Application Insights resource → **Logs**
@@ -245,11 +264,28 @@ The webhook handler's outer `except` always returns 200 with body `error-logged`
    ```
    Remote build takes ~2–3 min.
 
-5. **Re-run smoke test** (see error #9 + the publish-test loop in this doc's history)
-   - Direct POST a fake `/sendpoll` update to the webhook URL with the secret header.
-   - Expect `200 ok` (not `error-logged`).
-   - Verify a row appears in Cosmos `sessions` table (Data Explorer).
-   - Verify a poll message appears in the Telegram group.
+5. **Re-run smoke test** — paste this PowerShell block as a single unit (replace `from.id` / `chat.id` with your real Telegram user ID if `7975723065` is wrong):
+   ```powershell
+   $body = @{
+     update_id = 999100
+     message = @{
+       message_id = 1
+       from = @{ id = [int64]7975723065; is_bot = $false; first_name = "Joshua"; username = "joshuadui" }
+       chat = @{ id = [int64]7975723065; type = "private" }
+       date = [int][double]::Parse((Get-Date -UFormat %s))
+       text = "/sendpoll"
+     }
+   } | ConvertTo-Json -Depth 6 -Compress
+
+   $resp = Invoke-WebRequest -Uri $URL -Method POST `
+     -Headers @{ "X-Telegram-Bot-Api-Secret-Token" = $SECRET } `
+     -ContentType "application/json" `
+     -Body $body -UseBasicParsing
+   "Status: $($resp.StatusCode), Body: $($resp.Content)"
+   ```
+   - Expect `200 ok` once unblocked (currently `200 error-logged`).
+   - Then wait 60–90s (error #14) and check App Insights via the portal.
+   - On full success: a row appears in Cosmos `sessions` table (Data Explorer) AND a poll message lands in the Telegram group.
 
 6. **Once webhook is green**, smoke-test scheduler (manual timer trigger) and exporter (enqueue with short visibility timeout). Then move to A7 (Terraform IaC).
 
