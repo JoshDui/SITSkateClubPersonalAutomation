@@ -4,7 +4,23 @@ Parallel Azure implementation of the SIT Inline Skate Bot, deployed alongside th
 
 ## Status
 
-Work-in-progress on `feat/azure-port` branch. AWS deployment on `main` is unaffected — both clouds eventually run the same bot.
+Deployed and end-to-end validated on `feat/azure-port` branch (2026-04-28). AWS deployment on `main` is unaffected.
+
+- ✅ Webhook → Cosmos write → Telegram poll round-trip verified
+- ✅ Scheduler manual-trigger idempotency verified
+- ✅ Exporter Queue Trigger fires on visibility expiry, payload built, Power Automate POST path exercised
+- ⬜ Terraform IaC (currently provisioned imperatively via `az` CLI)
+- ⬜ GitHub Actions deploy pipeline with OIDC federation
+
+Detailed session handoff with all 16 errors hit during deployment: [`PROGRESS.md`](./PROGRESS.md).
+
+**Currently deployed resources** (manual, japaneast region — see PROGRESS.md error #1 for region-policy backstory):
+- Resource Group: `rg-skatebot-prod`
+- Function App: `skatebot-prod-azure-32441` (Linux Consumption, Python 3.12)
+- Cosmos DB Table API: free tier, 3 tables (`members`, `sessions`, `responses`)
+- Key Vault: `skatebot-prod-kv-29024` with 6 secrets
+- Storage Queue: `export-queue` on the Function App's Storage Account
+- Application Insights: linked to Function App, queries via Azure Portal Logs blade
 
 ## Architecture (vs AWS)
 
@@ -40,26 +56,42 @@ azure/
 
 ## Deploy
 
+**Currently** (imperative provisioning, A7 IaC pending):
+
+```powershell
+# Function code only — resources already provisioned
+cd azure/functionapp
+func azure functionapp publish skatebot-prod-azure-32441 --python --build remote
+```
+
+**Planned (post-A7)**:
+
 ```powershell
 # 1. Provision infrastructure
 cd azure/infra/terraform
-terraform init
-terraform apply
+terraform init && terraform apply
 
 # 2. Publish function code
 cd ../../functionapp
-func azure functionapp publish skatebot-prod-azure --python
+func azure functionapp publish skatebot-prod-azure --python --build remote
 
 # 3. Register webhook with Telegram
 cd ../scripts
 python setwebhook.py
 ```
 
+### Why `--build remote`
+
+Linux Consumption needs Linux-built wheels. A Windows dev box cannot produce them locally; remote build runs `pip install` on Azure's deployment server (~2–3 min). See PROGRESS.md error #7.
+
 ## Teardown
 
 ```powershell
-cd azure/infra/terraform
-terraform destroy
+# Currently (imperative)
+az group delete --name rg-skatebot-prod --yes --no-wait
+
+# Post-A7 (Terraform)
+cd azure/infra/terraform && terraform destroy
 ```
 
 ## Why a parallel deployment?
