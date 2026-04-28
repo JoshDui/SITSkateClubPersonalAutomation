@@ -1,9 +1,16 @@
 # Azure Deployment Progress
 
 **Branch:** `feat/azure-port` (off `main`)
-**Last commit:** `dcf73fc` — Fix Cosmos Table API rejecting 'id' as reserved property name
-**Last updated:** 2026-04-28
-**Status:** A4 in progress — webhook deployed, smoke test failing on a new exception (not yet inspected)
+**Last commit:** `062417d` — Route /sendpoll confirmation to the same topic as the poll
+**Last updated:** 2026-04-29
+**Status:** Export pivot **code complete, uncommitted, not yet rolled out**. End-to-end Azure pipeline (Telegram → webhook → Cosmos → queue → exporter) is verified working from prior sessions. Pivot replaces the dead Power Automate sink with Blob CSV + a local openpyxl script (see "Attendance Export Pivot" below). All four edited Python files compile; `terraform validate` passes.
+
+**Branch strategy (Path A, locked in 2026-04-29):**
+1. Roll out the export pivot on `feat/azure-port` (manual `az` block in "Rollout steps" → smoke test → commit)
+2. Open `feat/azure-port` → `main` as a single PR; merge once Azure is fully green
+3. **From the new `main`**, branch `feat/aws-export-pivot` to mirror the Blob/CSV pattern on S3 for the AWS Lambda exporter — AWS verification has cleared (2026-04-29), so M5 + the AWS pivot are unblocked and can be done after the Azure merge
+
+This keeps the AWS pivot off `feat/azure-port` (no branch contamination), and the AWS branch starts from a `main` that already carries the multi-cloud README + the "AWS pivot deferred" footnote, giving its eventual PR a clean narrative ("as foreshadowed, mirror Azure on S3").
 
 This document is a session handoff so either of us can resume cold. Read top-to-bottom: context → resource inventory → milestone status → errors-and-fixes → current blocker → resume steps.
 
@@ -67,13 +74,14 @@ webhook-secret
 | A1 | Azure account + tooling (CLI, Functions Core Tools v4, Azurite, Node 22) | ✅ Done |
 | A2 | Branch + scaffold + portable module copy (`poll.py`, `telegram.py`, `importer.py` verbatim) | ✅ Done — commit `e1c3c44` |
 | A3 | Cosmos DB + config layer (`shared/db.py` + `shared/config.py` rewritten) | ✅ Done — commit `4621db7` |
-| A4 | Function App + webhook function | 🟡 **In progress** — deployed, smoke test failing |
-| A5 | Scheduler function + Storage Queue | 🟡 Code committed (`00b54ef`), not yet smoke-tested |
-| A6 | Exporter function | 🟡 Code committed (`00b54ef`), not yet smoke-tested |
-| A7 | Terraform azurerm IaC | 🟢 Code written, import script provided, `terraform import` + `terraform plan` pending user execution |
-| A8 | Migration script + CI/CD | ⬜ Pending — `azure/scripts/migrate_aws_to_azure.py` is a stub |
-| A9 | README + multi-cloud framing | ⬜ Pending |
-| A10 | End-to-end smoke test | ⬜ Pending — depends on A4 unblock |
+| A4 | Function App + webhook function | ✅ Done — deployed, button taps + Cosmos writes verified |
+| A5 | Scheduler function + Storage Queue | ✅ Done — manual timer trigger returned 202; queue message enqueued |
+| A6 | Exporter function (original Power Automate POST) | ✅ Code shipped, but the sink died on Premium licensing — see B1 |
+| A7 | Terraform azurerm IaC | 🟢 Code complete (commit `8124bf7`), `terraform validate` clean, `import.ps1` provided; `terraform import` + `apply` pending user execution (A8 dependency) |
+| A8 | Migration script + CI/CD | ⬜ Pending — `migrate_aws_to_azure.py` is a stub; deploy-azure.yml not written |
+| A9 | README + multi-cloud framing | ✅ Done — top-level README + azure/README.md (commit `9231d52`) |
+| A10 | End-to-end smoke test | 🟡 Mostly done — webhook + scheduler verified; final exporter→Excel walk-through pending the B1 rollout |
+| B1 | **Export pivot** (Power Automate → Blob CSV + local openpyxl) | 🟢 Code complete (this session), uncommitted, rollout + smoke test pending |
 
 ---
 
@@ -324,6 +332,159 @@ Then in the smoke test payload:
 | `azure/functionapp/{host.json, requirements.txt, local.settings.json}` | ✅ Configured |
 | `azure/functionapp/{webhook,scheduler,exporter}/function.json` | ✅ Trigger bindings configured |
 | `azure/infra/terraform/*.tf` | ✅ Full stack written; `import.ps1` adopts existing manual deployment |
-| `azure/scripts/{setwebhook.py, migrate_aws_to_azure.py}` | ⬜ Stubs |
+| `azure/scripts/setwebhook.py` | ⬜ Stub |
+| `azure/scripts/migrate_aws_to_azure.py` | ⬜ Stub |
+| `azure/scripts/build_attendance_report.py` | ✅ Local Excel report (export pivot) |
 | `azure/tests/*.py` | ⬜ Stubs |
 | `azure/README.md` | ⬜ Stub |
+
+---
+
+## Attendance Export Pivot (2026-04-28)
+
+The original architecture had the exporter Function POST attendance JSON to a Power Automate flow that wrote rows into a SharePoint Excel file. That path is dead in this tenant:
+
+1. **Power Automate Premium gate.** Power Automate's "When an HTTP request is received" trigger is a Premium connector. The flow saves but the runtime refuses to invoke it for accounts without Premium licensing — flow checker says: *"This flow's owner needs a Power Automate Premium license."* SIT student accounts do not include Premium.
+
+2. **Microsoft Graph alternative blocked by tenant policy.** The natural replacement (register an AAD app with `Sites.ReadWrite.All` and write to Excel via Graph) requires `az ad app create`, which returns:
+
+   ```
+   Insufficient privileges to complete the operation.
+   ```
+
+   Joshua's account has no directory permissions in the SIT tenant, so neither AAD app registration nor admin consent for Graph permissions is achievable.
+
+3. **AWS does not help.** The Power Automate dependency is licensed at the Microsoft-account level, not the cloud provider. The AWS exporter Lambda hits the same wall and the Graph workaround needs the same admin consent.
+
+### New design — dual sink
+
+| Sink | Producer | Consumer |
+|---|---|---|
+| Per-session CSV in Blob Storage container `attendance` | `azure/functionapp/exporter/__init__.py` (Queue Trigger) | Cloud-side audit trail; downloadable via `az storage blob` or Azure Portal Storage Browser |
+| Local `Attendance.xlsx` workbook | `azure/scripts/build_attendance_report.py` (manual run) | The user, on demand, via `az login` + Cosmos query |
+
+The cloud pipeline still runs end-to-end (Telegram → Webhook → Cosmos → Queue → Exporter → Blob), preserving the queue-trigger architectural story. The local script reads Cosmos directly (Cosmos is the source of truth) and produces the human-facing Excel; the Blob CSVs are the cloud-side audit trail / fallback.
+
+### How to regenerate the Excel report
+
+One-time setup (in your local venv or global Python — same packages the Function App already lists, just installed locally for the script's process):
+
+```powershell
+pip install openpyxl azure-data-tables azure-identity
+```
+
+Cold start, after `az login`:
+
+```powershell
+python C:\UniPain\skatetelegrambot-aws\azure\scripts\build_attendance_report.py
+# Default: Attendance.xlsx in cwd, sessions from the last 90 days, skipped sessions filtered out
+
+python ...\build_attendance_report.py --since 2026-01-01 --out Q1.xlsx
+python ...\build_attendance_report.py --include-skipped
+```
+
+The script auto-discovers `COSMOS_ENDPOINT`, `TABLE_*`, and `KEY_VAULT_URL` from the deployed Function App's app settings via Azure CLI. Override with `--function-app` / `--resource-group` or pre-set env vars if pointing at a different deployment.
+
+### Cosmos data-plane access for the running user
+
+The local script needs the Cosmos DB Built-in Data Contributor role on Joshua's user identity (the FA's MI already has it; Joshua's user does not by default). `azure/infra/terraform/rbac.tf` now includes `azurerm_cosmosdb_sql_role_assignment.tf_cosmos_data_contrib` to grant this on `terraform apply`.
+
+If you need to grant it ad-hoc before re-applying Terraform:
+
+```powershell
+$COSMOS = "<cosmos-account-name>"
+$RG = "rg-skatebot-prod"
+$PRINCIPAL = (az ad signed-in-user show --query id -o tsv)
+az cosmosdb sql role assignment create `
+  --account-name $COSMOS --resource-group $RG `
+  --scope "/" `
+  --role-definition-id 00000000-0000-0000-0000-000000000002 `
+  --principal-id $PRINCIPAL
+```
+
+### Rollout steps (after merging this change)
+
+The deployed Function App was provisioned manually pre-Terraform, so it does not yet have `BLOB_ACCOUNT_URL` / `ATTENDANCE_CONTAINER` app settings, the `attendance` container, or the new RBAC role assignments. Two ways to apply:
+
+**Option A — Terraform (preferred, idempotent):**
+
+```powershell
+cd C:\UniPain\skatetelegrambot-aws\azure\infra\terraform
+# If you haven't imported existing resources yet, run import.ps1 first.
+terraform plan
+terraform apply
+```
+
+The plan should show: `+ azurerm_storage_container.attendance`, `+ azurerm_role_assignment.fa_blob_data_contrib`, `+ azurerm_cosmosdb_sql_role_assignment.tf_cosmos_data_contrib`, and `~ azurerm_linux_function_app.main` (app settings update). Apply.
+
+**Option B — Manual `az` (immediate, while Terraform import is pending):**
+
+```powershell
+$RG = "rg-skatebot-prod"
+$FA = "skatebot-prod-azure-32441"
+$SA = (az functionapp config appsettings list --name $FA --resource-group $RG `
+        --query "[?name=='AzureWebJobsStorage'].value | [0]" -o tsv `
+        | Select-String -Pattern "AccountName=([^;]+)" -AllMatches).Matches.Groups[1].Value
+
+# 1. Container
+az storage container create --account-name $SA --name attendance --auth-mode login
+
+# 2. App settings
+az functionapp config appsettings set --name $FA --resource-group $RG --settings `
+  "BLOB_ACCOUNT_URL=https://$SA.blob.core.windows.net" "ATTENDANCE_CONTAINER=attendance"
+
+# 3. RBAC: Blob Data Contributor on the FA's MI
+$MI_PRINCIPAL = (az functionapp identity show --name $FA --resource-group $RG --query principalId -o tsv)
+$SA_ID = (az storage account show --name $SA --resource-group $RG --query id -o tsv)
+az role assignment create --assignee-object-id $MI_PRINCIPAL --assignee-principal-type ServicePrincipal `
+  --role "Storage Blob Data Contributor" --scope $SA_ID
+
+# 4. Cosmos data role on the local user (so build_attendance_report.py can query)
+$COSMOS_ACCT = (az cosmosdb list --resource-group $RG --query "[0].name" -o tsv)
+$ME = (az ad signed-in-user show --query id -o tsv)
+az cosmosdb sql role assignment create `
+  --account-name $COSMOS_ACCT --resource-group $RG `
+  --scope "/" `
+  --role-definition-id 00000000-0000-0000-0000-000000000002 `
+  --principal-id $ME
+
+# 5. Redeploy Function App with the new exporter code
+cd C:\UniPain\skatetelegrambot-aws\azure\functionapp
+func azure functionapp publish $FA --python
+```
+
+### Smoke test after rollout
+
+To re-trigger the exporter on an already-tested session without waiting for the next live one:
+
+1. Open Azure Portal → Cosmos DB → Data Explorer → `sessions` table → find the test session row → set `exported = 0`, save.
+2. Enqueue a fresh Storage Queue message (PowerShell):
+
+   ```powershell
+   $SESSION_ID = "<session-ulid>"  # the row you just reset
+   $payload = @{ session_id = $SESSION_ID } | ConvertTo-Json -Compress
+   $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+   az storage message put --queue-name export-queue --content $b64 --account-name $SA --auth-mode login --visibility-timeout 5
+   ```
+
+3. Wait ~60s, then in Azure Portal → Storage Account → Containers → `attendance` confirm `attendance/{date}_{ulid}.csv` exists. Download and verify columns.
+4. Run the local script to generate Excel from the same data:
+
+   ```powershell
+   python C:\UniPain\skatetelegrambot-aws\azure\scripts\build_attendance_report.py --since 2026-01-01
+   start Attendance.xlsx
+   ```
+
+### Files changed in this pivot
+
+- `azure/functionapp/exporter/__init__.py` — Power Automate POST removed; Blob CSV upload added
+- `azure/functionapp/shared/config.py` — `BLOB_ACCOUNT_URL` + `ATTENDANCE_CONTAINER` env vars
+- `azure/functionapp/shared/db.py` — `list_sessions_since` helper added
+- `azure/functionapp/requirements.txt` — `azure-storage-blob` added
+- `azure/infra/terraform/functionapp.tf` — `attendance` container + new app settings
+- `azure/infra/terraform/rbac.tf` — Storage Blob Data Contributor for FA MI; Cosmos data role for the running user
+- `azure/scripts/build_attendance_report.py` — new local report generator
+
+### Dormant resources (kept intentionally)
+
+- `power-automate-url` Key Vault secret (placeholder value): unread by code now, but left in Terraform/Vault to avoid a Key Vault destroy-recreate. If a future deployment moves to a Premium tenant, the same secret slot can be re-populated and a one-line revert restores the POST path.

@@ -2,14 +2,16 @@
 
 Session handoff document. Snapshot of where deployment stands so future-Joshua can resume without re-reading the whole chat history.
 
-**Last updated:** 2026-04-21
-**Branch:** `main` (tracking `origin/main`)
-**Last commit:** `44dd0e8` — "Add build.ps1 -- Windows equivalent of make package"
+**Last updated:** 2026-04-29
+**Branch:** `main` (tracking `origin/main`) — AWS-only; Azure work lives on `feat/azure-port`.
+**Last commit on main:** `44dd0e8` — "Add build.ps1 -- Windows equivalent of make package"
 **Region:** `ap-southeast-1` (Singapore)
+
+> **Multi-cloud scope** (added 2026-04-29): the bot has been parallel-ported to Azure on `feat/azure-port` over the last week. AWS remains the original/default; Azure is a portfolio piece. See `azure/PROGRESS.md` for the Azure-side handoff. The plan is to merge `feat/azure-port` → `main` once its export pivot lands (Path A), then branch `feat/aws-export-pivot` off the new `main` to mirror the pivot on S3 (the AWS exporter has the same Power Automate Premium dependency and needs the same fix).
 
 ---
 
-## Overall status: 4 of 5 deployment milestones complete
+## Overall status: 4 of 5 deployment milestones complete; M5 unblocked
 
 | # | Milestone | Status |
 |---|---|---|
@@ -17,9 +19,11 @@ Session handoff document. Snapshot of where deployment stands so future-Joshua c
 | M2 | IAM deploy user + AWS CLI configured | ✅ Done |
 | M3 | GitHub repo created + code pushed | ✅ Done |
 | M4 | First `terraform apply` — 39 AWS resources live | ✅ Done |
-| M5 | Populate SSM + register Telegram webhook + smoke test | ⏳ Pending |
+| M5 | Populate SSM + register Telegram webhook + smoke test | 🟡 **Unblocked 2026-04-29** — AWS new-account verification cleared. Pending execution. |
 
-The bot is **deployed but not yet functional** — Lambda/DynamoDB/EventBridge all exist on AWS, but SSM parameters are empty placeholders so the webhook Lambda can't read the bot token yet. Telegram webhook is also not registered. Neither step changes any infrastructure; both are pure config.
+The bot is **deployed but not yet functional on AWS** — Lambda/DynamoDB/EventBridge all exist, but SSM parameters are empty placeholders so the webhook Lambda can't read the bot token yet, and the Telegram webhook is registered to Azure (only one webhook per bot). To run M5, populate SSM, switch the Telegram webhook to the AWS Function URL via `setwebhook.py`, and smoke-test. Neither step changes any infrastructure; both are pure config.
+
+When M5 is done, immediately follow with the AWS pivot on its own branch (see "Multi-cloud scope" note above) — the AWS exporter still POSTs to Power Automate, which is dead in this Microsoft tenant; mirror the Azure Blob CSV + local Excel pattern on S3.
 
 ---
 

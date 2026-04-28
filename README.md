@@ -55,7 +55,9 @@ flowchart LR
     SCHED2 -- enqueue with visibility_timeout=86400 --> Q[Storage Queue<br/>export-queue]
     Q -- becomes visible at session_start+24h --> EXP2
     EXP2 -- read --> COSMOS
-    EXP2 -- POST attendance JSON --> PA2[Power Automate → SharePoint Excel]
+    EXP2 -- upload CSV --> BLOB[Blob Storage<br/>attendance/&#123;date&#125;_&#123;ulid&#125;.csv]
+    LOCAL[build_attendance_report.py<br/>local script] -- query --> COSMOS
+    LOCAL -- write --> XLSX[Attendance.xlsx<br/>local file]
 
     KV[Azure Key Vault]
     WH2 -.MI auth.- KV
@@ -81,8 +83,9 @@ flowchart LR
 | IaC | Terraform `aws` provider | Terraform `azurerm` provider | Same tool, two providers — one of the strongest reasons to standardise on Terraform |
 | CI auth | GitHub Actions OIDC → IAM Role | GitHub Actions OIDC → MI federation | No long-lived credentials in either repo |
 | Lambda layers | `services/*/handler.py` zips | Bundle into `functionapp/` deploy package | Functions has no layers equivalent |
+| Attendance export sink | Power Automate webhook → SharePoint Excel | Blob Storage CSV + local `openpyxl` report (`azure/scripts/build_attendance_report.py`) | Power Automate's HTTP trigger is a Premium connector and the Microsoft Graph alternative needs admin-consented `Sites.ReadWrite.All`, both blocked in the SIT student tenant. Azure pivoted to a free Blob+local pattern; AWS pivot is deferred until that branch's verification clears. |
 
-**Common to both**: Telegram bot token, group chat ID, admin allowlist, Power Automate webhook URL — stored as secrets in their respective vaults, fetched lazily on cold start.
+**Common to both**: Telegram bot token, group chat ID, admin allowlist — stored as secrets in their respective vaults, fetched lazily on cold start. (The `power-automate-url` secret is dormant on Azure post-pivot but kept in place.)
 
 ---
 
@@ -109,6 +112,11 @@ Both deployments structurally fit inside their respective free tiers:
 .
 ├── README.md                  # ← you are here
 ├── SETUP.md                   # AWS-side first-time setup
+├── PROGRESS.md                # Multi-cloud deployment progress / session handoff
+├── out.json                   # AWS Lambda Console "Test" response sample — the 401
+│                              #   "unauthorized" body verifies the webhook's
+│                              #   X-Telegram-Bot-Api-Secret-Token check fires correctly
+│                              #   on unsigned requests (M4 evidence)
 │
 ├── services/                  # AWS — Lambda handlers
 │   ├── webhook/
@@ -122,6 +130,11 @@ Both deployments structurally fit inside their respective free tiers:
 │   └── importer.py            # Pure Excel parsing
 ├── infra/terraform/           # AWS Terraform (aws provider)
 ├── scripts/                   # AWS-side tooling
+│   ├── bootstrap-ssm.ps1      #   Securely seed /skatebot/prod/* SSM parameters
+│   │                          #   (prompts for bot token via SecureString, generates
+│   │                          #   a fresh webhook secret) — M5 first step
+│   ├── setwebhook.py          #   Register/refresh the Telegram webhook URL
+│   └── migrate_sqlite_to_dynamo.py  # One-shot legacy SQLite → DynamoDB import
 ├── tests/                     # AWS tests (DynamoDB Local + moto)
 │
 ├── azure/                     # ── Azure mirror ─────────────────────

@@ -24,6 +24,7 @@ the AWS semantic of "set these attrs, create the entity if missing".
 """
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -244,6 +245,27 @@ def list_unexported_sessions() -> list[dict]:
         f"PartitionKey eq '{_SESSION_PK}' and skipped eq 0 and exported eq 0"
     )
     return [_entity_to_dict(e) for e in _sessions.query_entities(filt)]
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def list_sessions_since(since_date: str, include_skipped: bool = False) -> list[dict]:
+    """All sessions with session_date >= since_date (ISO YYYY-MM-DD), sorted
+    ascending. Used by scripts/build_attendance_report.py — the Function App
+    itself only ever needs single-session lookups.
+
+    The strict date-format guard is defence-in-depth against OData injection:
+    the value is interpolated into a filter string, so anything other than a
+    plain ISO date here is a bug worth blowing up on."""
+    if not _ISO_DATE_RE.match(since_date):
+        raise ValueError(f"since_date must be YYYY-MM-DD, got {since_date!r}")
+    parts = [f"PartitionKey eq '{_SESSION_PK}'", f"session_date ge '{since_date}'"]
+    if not include_skipped:
+        parts.append("skipped eq 0")
+    filt = " and ".join(parts)
+    items = [_entity_to_dict(e) for e in _sessions.query_entities(filt)]
+    return sorted(items, key=lambda r: r.get("session_date", ""))
 
 
 def get_upcoming_session(within_days: int = 7) -> dict | None:

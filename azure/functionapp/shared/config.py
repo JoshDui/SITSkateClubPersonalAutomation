@@ -39,6 +39,12 @@ TIMEZONE = os.environ.get("TIMEZONE", "Asia/Singapore")
 QUEUE_ACCOUNT_URL = os.environ.get("QUEUE_ACCOUNT_URL")
 EXPORT_QUEUE_NAME = os.environ.get("EXPORT_QUEUE_NAME", "export-queue")
 
+# Blob storage used by the exporter to write per-session attendance CSVs.
+# Same Storage Account as QUEUE_ACCOUNT_URL — only the endpoint differs.
+# Format: https://<storage-account>.blob.core.windows.net/
+BLOB_ACCOUNT_URL = os.environ.get("BLOB_ACCOUNT_URL")
+ATTENDANCE_CONTAINER = os.environ.get("ATTENDANCE_CONTAINER", "attendance")
+
 # ── Defaults the cron uses when auto-creating a session ─────────────────────
 
 DEFAULT_SESSION_START = os.environ.get("DEFAULT_SESSION_START", "18:30")

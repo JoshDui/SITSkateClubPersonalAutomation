@@ -30,6 +30,19 @@ resource "azurerm_storage_queue" "export" {
   storage_account_name = azurerm_storage_account.main.name
 }
 
+# Attendance CSV sink. Replaces the original Power Automate HTTP POST: the
+# exporter Function writes one CSV per session (attendance/<date>_<ulid>.csv)
+# and the local report script aggregates all CSVs into Attendance.xlsx.
+# See azure/PROGRESS.md "Attendance export pivot" — the original Power Automate
+# path is dead because its HTTP trigger requires a Premium licence the SIT
+# tenant does not grant, and the Microsoft Graph alternative is blocked by
+# tenant directory permissions.
+resource "azurerm_storage_container" "attendance" {
+  name                  = "attendance"
+  storage_account_id    = azurerm_storage_account.main.id
+  container_access_type = "private"
+}
+
 resource "azurerm_service_plan" "main" {
   name                = local.plan_name
   resource_group_name = azurerm_resource_group.main.name
@@ -74,7 +87,12 @@ resource "azurerm_linux_function_app" "main" {
     COSMOS_ENDPOINT   = azurerm_cosmosdb_account.main.endpoint
     QUEUE_ACCOUNT_URL = "https://${azurerm_storage_account.main.name}.queue.core.windows.net"
     EXPORT_QUEUE_NAME = local.queue_name
-    TIMEZONE          = var.scheduler_timezone
+
+    # Blob endpoint for the attendance CSV sink (see azurerm_storage_container.attendance).
+    BLOB_ACCOUNT_URL     = "https://${azurerm_storage_account.main.name}.blob.core.windows.net"
+    ATTENDANCE_CONTAINER = azurerm_storage_container.attendance.name
+
+    TIMEZONE = var.scheduler_timezone
 
     TABLE_MEMBERS   = azurerm_cosmosdb_table.members.name
     TABLE_SESSIONS  = azurerm_cosmosdb_table.sessions.name

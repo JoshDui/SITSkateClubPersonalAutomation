@@ -3,6 +3,7 @@ azure-data-tables
 azure-keyvault-secrets
 azure-identity
 azure-storage-queue
+azure-storage-blob
 httpx
 openpyxl
 python-ulid

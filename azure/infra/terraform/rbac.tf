@@ -36,6 +36,19 @@ resource "azurerm_cosmosdb_sql_role_assignment" "fa_cosmos_data_contrib" {
   scope              = azurerm_cosmosdb_account.main.id
 }
 
+# The Terraform-running user (Joshua) needs the same data-plane role so the
+# local report script (azure/scripts/build_attendance_report.py) can query
+# Cosmos through `az login` credentials without admin-side intervention.
+# Without this, DefaultAzureCredential gets a token but every read/query
+# returns 403.
+resource "azurerm_cosmosdb_sql_role_assignment" "tf_cosmos_data_contrib" {
+  resource_group_name = azurerm_resource_group.main.name
+  account_name        = azurerm_cosmosdb_account.main.name
+  role_definition_id  = "${azurerm_cosmosdb_account.main.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"
+  principal_id        = data.azurerm_client_config.current.object_id
+  scope               = azurerm_cosmosdb_account.main.id
+}
+
 # ── Storage Queue: enqueue-only is fine but Contributor includes peek ─────
 
 resource "azurerm_role_assignment" "fa_queue_data_contrib" {
@@ -49,3 +62,16 @@ resource "azurerm_role_assignment" "fa_queue_data_contrib" {
 # Storage Queue Data Contributor covers both. If you tighten to least-privilege
 # later, the runtime needs the "Processor" role on the queue and the producer
 # code needs "Sender".
+
+# ── Storage Blob: write attendance CSVs from the exporter Function ────────
+#
+# Scoped to the storage account (not the single attendance container) so the
+# AzureWebJobsStorage path and any future containers are covered without
+# revisiting RBAC. Strictly the exporter only needs write to one container —
+# tighten to container scope later if least-privilege matters.
+
+resource "azurerm_role_assignment" "fa_blob_data_contrib" {
+  scope                = azurerm_storage_account.main.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_function_app.main.identity[0].principal_id
+}
