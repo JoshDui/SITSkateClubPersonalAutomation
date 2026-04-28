@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -32,6 +33,11 @@ from shared import config, db, importer, poll, telegram
 
 log = logging.getLogger("webhook")
 log.setLevel(logging.INFO)
+
+# ULID alphabet (Crockford base32, exactly 26 chars). callback_query.data is
+# user-controlled and flows directly into Cosmos OData filter strings, so we
+# validate session_id matches the ULID shape before any DB call.
+_ULID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 
 # Storage Queue client cached at module level for warm-container reuse.
 # TextBase64EncodePolicy matches the Functions Queue Trigger default
@@ -281,14 +287,25 @@ def _handle_callback(cq: dict) -> None:
         return
     session_id, category = parts[1], parts[2]
 
+    # Both fields flow into Cosmos OData filter strings. Reject anything that
+    # doesn't match the expected shape, otherwise a crafted callback could
+    # break out of the filter literal.
+    if not _ULID_RE.match(session_id) or category not in poll.CATEGORY_KEYS:
+        log.warning("Rejected callback with invalid session_id/category: %r", data)
+        return
+
     user = cq.get("from") or {}
+    user_id = user.get("id")
+    if user_id is None:
+        log.warning("Callback missing from.id — dropping (would corrupt shared 'None' row).")
+        return
     now_iso = datetime.now(timezone.utc).isoformat()
 
     db.toggle_response(
         session_id=session_id,
-        telegram_id=user.get("id"),
+        telegram_id=user_id,
         username=user.get("username"),
-        first_name=user.get("first_name") or user.get("username") or str(user.get("id")),
+        first_name=user.get("first_name") or user.get("username") or str(user_id),
         category=category,
         responded_at=now_iso,
     )
@@ -348,7 +365,9 @@ def _enqueue_export(session_id: str) -> None:
     ).replace(tzinfo=tz)
     fire_at = start + timedelta(hours=24)
     now = datetime.now(tz)
-    delay_seconds = max(60, int((fire_at - now).total_seconds()))
+    # Storage Queue rejects visibility_timeout > 604800 (7 days). /setsession
+    # to a date >7d out would otherwise throw silently and lose the export job.
+    delay_seconds = min(max(60, int((fire_at - now).total_seconds())), 604800)
 
     payload = json.dumps({"session_id": session_id})
     _get_queue_client().send_message(payload, visibility_timeout=delay_seconds)

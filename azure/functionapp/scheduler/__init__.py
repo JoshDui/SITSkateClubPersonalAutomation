@@ -101,7 +101,8 @@ def _enqueue_export(session_id: str) -> None:
     ).replace(tzinfo=tz)
     fire_at = start + timedelta(hours=24)
     now = datetime.now(tz)
-    delay_seconds = max(60, int((fire_at - now).total_seconds()))
+    # Storage Queue rejects visibility_timeout > 604800 (7 days). Cap defensively.
+    delay_seconds = min(max(60, int((fire_at - now).total_seconds())), 604800)
 
     payload = json.dumps({"session_id": session_id})
     _get_queue_client().send_message(payload, visibility_timeout=delay_seconds)

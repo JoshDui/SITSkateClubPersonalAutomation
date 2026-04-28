@@ -105,22 +105,24 @@ def upsert_member(
         "imported_at": imported_at,
     }
     new_attrs = {k: v for k, v in new_attrs.items() if v is not None}
+    entity = {"PartitionKey": _MEMBER_PK, "RowKey": username, "username": username, **new_attrs}
 
     try:
         existing = _members.get_entity(partition_key=_MEMBER_PK, row_key=username)
     except ResourceNotFoundError:
-        entity = {"PartitionKey": _MEMBER_PK, "RowKey": username, "username": username, **new_attrs}
         _members.create_entity(entity=entity)
         return "new"
 
     existing_dict = _entity_to_dict(existing)
     changed = any(
         existing_dict.get(k) != new_attrs.get(k)
-        for k in ("full_name", "is_sit_student", "student_id", "full_course_name", "cluster", "year")
+        for k in new_attrs if k != "imported_at"
     )
     if changed:
-        entity = {"PartitionKey": _MEMBER_PK, "RowKey": username, "username": username, **new_attrs}
-        _members.upsert_entity(entity=entity, mode=UpdateMode.REPLACE)
+        # MERGE (not REPLACE) preserves any fields written outside the import
+        # path (e.g. a future /sethandle command). The file's docstring at the
+        # top promises MERGE semantics throughout — this honours it.
+        _members.upsert_entity(entity=entity, mode=UpdateMode.MERGE)
         return "updated"
     return "unchanged"
 
