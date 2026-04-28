@@ -1,0 +1,18 @@
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Variable files — may contain secrets
+*.tfvars
+*.tfvars.json
+imported.auto.tfvars
+
+# Override files — local-only
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

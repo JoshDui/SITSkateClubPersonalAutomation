@@ -70,7 +70,7 @@ webhook-secret
 | A4 | Function App + webhook function | 🟡 **In progress** — deployed, smoke test failing |
 | A5 | Scheduler function + Storage Queue | 🟡 Code committed (`00b54ef`), not yet smoke-tested |
 | A6 | Exporter function | 🟡 Code committed (`00b54ef`), not yet smoke-tested |
-| A7 | Terraform azurerm IaC | ⬜ Pending — `azure/infra/terraform/*.tf` are empty stubs |
+| A7 | Terraform azurerm IaC | 🟢 Code written, import script provided, `terraform import` + `terraform plan` pending user execution |
 | A8 | Migration script + CI/CD | ⬜ Pending — `azure/scripts/migrate_aws_to_azure.py` is a stub |
 | A9 | README + multi-cloud framing | ⬜ Pending |
 | A10 | End-to-end smoke test | ⬜ Pending — depends on A4 unblock |
@@ -323,7 +323,7 @@ Then in the smoke test payload:
 | `azure/functionapp/shared/{poll,telegram,importer}.py` | ✅ Verbatim copies from AWS |
 | `azure/functionapp/{host.json, requirements.txt, local.settings.json}` | ✅ Configured |
 | `azure/functionapp/{webhook,scheduler,exporter}/function.json` | ✅ Trigger bindings configured |
-| `azure/infra/terraform/*.tf` | ⬜ Empty stubs — A7 work |
+| `azure/infra/terraform/*.tf` | ✅ Full stack written; `import.ps1` adopts existing manual deployment |
 | `azure/scripts/{setwebhook.py, migrate_aws_to_azure.py}` | ⬜ Stubs |
 | `azure/tests/*.py` | ⬜ Stubs |
 | `azure/README.md` | ⬜ Stub |
