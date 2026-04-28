@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import os
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 
@@ -75,6 +76,21 @@ def admin_ids() -> set[int]:
 
 def group_chat_id() -> int:
     return int(_get_secret("group-chat-id"))
+
+
+def group_topic_id() -> int | None:
+    """Optional: message_thread_id of a topic inside the group's supergroup.
+    None (or absent secret) = post to the default 'General' topic.
+
+    Find the thread_id by right-clicking any message in the target topic in
+    Telegram Desktop → Copy Link. The URL is t.me/c/<group>/<thread>/<msg>;
+    the thread component is the value to store as 'group-topic-id'."""
+    try:
+        raw = _get_secret("group-topic-id")
+    except ResourceNotFoundError:
+        return None
+    raw = (raw or "").strip()
+    return int(raw) if raw else None
 
 
 def rental_skates_handle() -> str:

@@ -84,6 +84,7 @@ def _send_poll(session_id: str) -> None:
         chat_id=config.group_chat_id(),
         text=poll.build_poll_text(session, []),
         reply_markup=poll.build_keyboard(session_id),
+        message_thread_id=config.group_topic_id(),
     )
     db.set_poll_message_id(session_id, result["message_id"])
 

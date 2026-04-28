@@ -31,8 +31,21 @@ def _call(method: str, **params) -> dict:
     return data["result"]
 
 
-def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> dict:
-    return _call("sendMessage", chat_id=chat_id, text=text, reply_markup=reply_markup)
+def send_message(
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+    message_thread_id: int | None = None,
+) -> dict:
+    """`message_thread_id` targets a topic in a forum-enabled supergroup.
+    Omit (or pass None) to post in the default 'General' topic."""
+    return _call(
+        "sendMessage",
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        message_thread_id=message_thread_id,
+    )
 
 
 def edit_message_text(
