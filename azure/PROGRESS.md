@@ -196,32 +196,31 @@ Status `3221225477` is `0xC0000005` — Windows access violation. This is the sa
 **Cause:** Linux Consumption Functions batch-flush telemetry every ~30s + Microsoft's ingestion pipeline adds another 30–60s delay. A query within 60s of the request will legitimately show nothing.
 **Fix:** Wait 60–90s after firing the test before running the KQL query. Or use Live Metrics (Application Insights → Live Metrics) which has ~1s latency but doesn't persist data — good for confirming a request landed, not for inspecting tracebacks.
 
-### 15. Cosmos `id` fix did not unblock the smoke test (root cause TBD)
-**Symptom:** After commit `dcf73fc` (the `id` reserved-property fix), the webhook still returns `200 error-logged` on `/sendpoll`. A subsequent exception is being thrown but its trace was not yet captured.
-**Status:** Open as of 2026-04-28. Likely candidates (none confirmed):
-- `_send_poll` → Telegram bot can't post to the group (bot not added, or `group-chat-id` wrong)
-- `_enqueue_export` → Storage Queue Data Contributor role missing on the System-Assigned MI
-- `db.set_poll_message_id` → another Cosmos schema constraint (e.g. integer field type)
-- Another `_entity_to_dict` issue that the prior crash masked
-**Diagnostic step:** Run this KQL to see which trace is the *last* successful one before the exception — that pinpoints the failing step:
-```kql
-union exceptions, traces
-| where timestamp > ago(10m)
-| order by timestamp asc
-| project timestamp, severityLevel, message, outerMessage=column_ifexists("outerMessage",""), details=column_ifexists("details","")
+### 15. Cosmos `id` fix did not unblock the smoke test — second bug was synthetic-test IDs
+**Symptom:** After commit `dcf73fc` (the `id` reserved-property fix), the webhook still returned `200 error-logged` on `/sendpoll`. App Insights traceback pointed at:
 ```
+File "/home/site/wwwroot/webhook/__init__.py", line 104, in _handle_message
+    telegram.send_message(chat["id"], "⛔ Admin only.")
+httpx.HTTPStatusError: 400 Bad Request from api.telegram.org/...sendMessage
+```
+**Cause:** The test payload used a placeholder `from.id` / `chat.id` (`7975723065`) that:
+1. Was NOT in the real `admin-ids` Key Vault secret → the handler entered the "Admin only" reject branch
+2. Was a fake user that has never DM'd the bot → Telegram refused to deliver the rejection message to that chat (bots cannot initiate DMs)
+**Fix:** Always use real Telegram IDs for synthetic tests. Fetch them from Key Vault:
+```powershell
+$ADMIN_ID = az keyvault secret show --vault-name $VAULT --name admin-ids --query value -o tsv
+$GROUP_ID = az keyvault secret show --vault-name $VAULT --name group-chat-id --query value -o tsv
+```
+Then in the smoke test payload:
+- `from.id` = first entry of `$ADMIN_ID` (it's a comma-separated list)
+- `chat.id` = `$GROUP_ID` (so replies land in the group where the bot is a member)
+**Diagnostic that found it:** the `union exceptions, traces` KQL — looking at the *last successful trace* before the exception (the Key Vault `admin-ids` fetch) plus the exception line number (104) pinpointed the admin-rejection path, not a Cosmos or business-logic bug.
 
 ---
 
 ## Current Blocker
 
-**See error #15** — the `id` fix didn't unblock; webhook still returns `200 error-logged`. The next exception's trace has not been captured yet (App Insights queries kept hitting the ingestion-lag issue, see #14).
-
-**Concrete next action when resuming:**
-1. Re-fire the smoke test (PowerShell block in "Resume Cold" step 4 below)
-2. Wait 60–90s
-3. Run the diagnostic KQL from error #15 in the Azure Portal Logs blade
-4. Look at the *last `info` trace* before the exception — that's the step that succeeded; the next step is what failed
+**Pending verification** — the synthetic-test ID issue (error #15) was identified. The next smoke test should use real `admin-ids` and `group-chat-id` values fetched from Key Vault. See "Resume Cold" step 5 for the corrected PowerShell block.
 
 ---
 
@@ -264,14 +263,17 @@ union exceptions, traces
    ```
    Remote build takes ~2–3 min.
 
-5. **Re-run smoke test** — paste this PowerShell block as a single unit (replace `from.id` / `chat.id` with your real Telegram user ID if `7975723065` is wrong):
+5. **Re-run smoke test** — paste as a single unit. Always fetch real IDs from Key Vault (see error #15 — synthetic IDs cause Telegram 400 + admin-reject):
    ```powershell
+   $ADMIN_ID = az keyvault secret show --vault-name $VAULT --name admin-ids --query value -o tsv
+   $GROUP_ID = az keyvault secret show --vault-name $VAULT --name group-chat-id --query value -o tsv
+
    $body = @{
      update_id = 999100
      message = @{
        message_id = 1
-       from = @{ id = [int64]7975723065; is_bot = $false; first_name = "Joshua"; username = "joshuadui" }
-       chat = @{ id = [int64]7975723065; type = "private" }
+       from = @{ id = [int64]($ADMIN_ID -split ',')[0]; is_bot = $false; first_name = "Joshua"; username = "joshuadui" }
+       chat = @{ id = [int64]$GROUP_ID; type = "supergroup" }
        date = [int][double]::Parse((Get-Date -UFormat %s))
        text = "/sendpoll"
      }
@@ -283,9 +285,9 @@ union exceptions, traces
      -Body $body -UseBasicParsing
    "Status: $($resp.StatusCode), Body: $($resp.Content)"
    ```
-   - Expect `200 ok` once unblocked (currently `200 error-logged`).
+   - Expect `200 ok`.
    - Then wait 60–90s (error #14) and check App Insights via the portal.
-   - On full success: a row appears in Cosmos `sessions` table (Data Explorer) AND a poll message lands in the Telegram group.
+   - On full success: a row appears in Cosmos `sessions` table (Data Explorer) AND a poll message lands in the Telegram group, plus a "✅ Poll sent for session on ..." reply.
 
 6. **Once webhook is green**, smoke-test scheduler (manual timer trigger) and exporter (enqueue with short visibility timeout). Then move to A7 (Terraform IaC).
 
