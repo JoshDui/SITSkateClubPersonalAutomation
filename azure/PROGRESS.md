@@ -216,6 +216,12 @@ Then in the smoke test payload:
 - `chat.id` = `$GROUP_ID` (so replies land in the group where the bot is a member)
 **Diagnostic that found it:** the `union exceptions, traces` KQL — looking at the *last successful trace* before the exception (the Key Vault `admin-ids` fetch) plus the exception line number (104) pinpointed the admin-rejection path, not a Cosmos or business-logic bug.
 
+### 16. Cosmos Table API forbids `#` in RowKey/PartitionKey
+**Symptom:** Real Telegram button tap → callback handler crashes with 400 Bad Request inserting into the `responses` table. Trace shows GET succeeded with `RowKey='non_sit%233844816317'` (URL-encoded `#`) returning 404 (expected), then POST insert returned 400.
+**Cause:** Cosmos Table API (and Azure Table Storage) forbid these characters in keys: `/`, `\`, `#`, `?`, control chars 0x00–0x1F and 0x7F–0x9F. The AWS-style composite RowKey `f"{category}#{telegram_id}"` works on DynamoDB but not Cosmos.
+**Fix:** Change separator from `#` to `:` in `azure/functionapp/shared/db.py::_response_rk` and update the OData prefix-range query in `get_responses_by_category` (`':'` → `';'` instead of `'#'` → `'$'`). The session entity's RowKey (a ULID) is unaffected — only the responses table uses composite keys.
+**Why latent until now:** session entities use a ULID as RowKey (no `#`). Only the responses table builds composite RowKeys with the separator, so the bug surfaced on the first real button-tap, not the `/sendpoll` test which only writes to sessions.
+
 ---
 
 ## Current Blocker

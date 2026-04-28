@@ -264,8 +264,15 @@ def get_upcoming_session(within_days: int = 7) -> dict | None:
 
 # ── Responses ────────────────────────────────────────────────────────────────
 
+_RESPONSE_SEP = ":"  # Cosmos Table API forbids '#' in row keys (along with '/', '\\', '?'
+                     # and control chars), so we cannot reuse the AWS DynamoDB '{category}#{id}'
+                     # separator. ':' is allowed, has no OData meaning, and the next codepoint
+                     # ';' is plain printable ASCII — clean for the prefix-range query in
+                     # get_responses_by_category.
+
+
 def _response_rk(category: str, telegram_id: int) -> str:
-    return f"{category}#{telegram_id}"
+    return f"{category}{_RESPONSE_SEP}{telegram_id}"
 
 
 def toggle_response(
@@ -313,12 +320,12 @@ def get_responses(session_id: str) -> list[dict]:
 
 
 def get_responses_by_category(session_id: str, category: str) -> list[dict]:
-    """RowKey begins with '{category}#'. The OData equivalent of begins_with
-    is a lex-range using the next codepoint after '#' (which is '$')."""
+    """RowKey begins with '{category}:'. The OData equivalent of begins_with
+    is a lex-range; the next codepoint after ':' (0x3A) is ';' (0x3B)."""
     filt = (
         f"PartitionKey eq '{session_id}' "
-        f"and RowKey ge '{category}#' "
-        f"and RowKey lt '{category}$'"
+        f"and RowKey ge '{category}:' "
+        f"and RowKey lt '{category};'"
     )
     items = [_entity_to_dict(e) for e in _responses.query_entities(filt)]
     return sorted(items, key=lambda r: r.get("responded_at", ""))
