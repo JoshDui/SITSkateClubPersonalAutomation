@@ -64,8 +64,15 @@ def _new_ulid() -> str:
 def _entity_to_dict(entity) -> dict:
     """Strip Cosmos system fields (etag, Timestamp, metadata) and rename
     PartitionKey/RowKey back to the AWS-native attribute names so callers
-    see the same shape as before."""
+    see the same shape as before.
+
+    For session entities, derive ``id`` from RowKey: Cosmos DB Table API
+    rejects ``id`` as a reserved property name (it is the underlying
+    document key), so we cannot store it directly — we re-attach it on
+    read to preserve the AWS-compatible ``session["id"]`` accessor."""
     d = dict(entity)
+    if d.get("PartitionKey") == _SESSION_PK:
+        d["id"] = d.get("RowKey")
     d.pop("PartitionKey", None)
     d.pop("RowKey", None)
     d.pop("etag", None)
@@ -152,7 +159,6 @@ def create_session(
     entity = {
         "PartitionKey": _SESSION_PK,
         "RowKey": session_id,
-        "id": session_id,
         "session_date": session_date,
         "start_time": start_time,
         "end_time": end_time,
