@@ -64,3 +64,9 @@ Thumbs.db
 .coverage
 htmlcov/
 coverage.xml
+
+# Generated attendance reports (azure/scripts/build_attendance_report.py output)
+Attendance.xlsx
+**/Attendance.xlsx
+test-attendance.csv
+**/test-attendance.csv

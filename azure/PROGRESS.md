@@ -1,9 +1,9 @@
 # Azure Deployment Progress
 
 **Branch:** `feat/azure-port` (off `main`)
-**Last commit:** `062417d` — Route /sendpoll confirmation to the same topic as the poll
-**Last updated:** 2026-04-29
-**Status:** Export pivot **code complete, uncommitted, not yet rolled out**. End-to-end Azure pipeline (Telegram → webhook → Cosmos → queue → exporter) is verified working from prior sessions. Pivot replaces the dead Power Automate sink with Blob CSV + a local openpyxl script (see "Attendance Export Pivot" below). All four edited Python files compile; `terraform validate` passes.
+**Last commit:** `f64207e` — B1: Pivot attendance export from Power Automate to Blob CSV + local Excel
+**Last updated:** 2026-05-01
+**Status:** Export pivot **shipped + verified end-to-end**. Manual `az` rollout applied 2026-04-30 (container, app settings, FA Blob role, user Cosmos role). Function App redeployed with the new exporter; smoke test passed: a queued message → exporter → CSV in `attendance` container → `build_attendance_report.py` → `Attendance.xlsx` open-able in Excel. Branch ready for merge to `main` (Path A step 2).
 
 **Branch strategy (Path A, locked in 2026-04-29):**
 1. Roll out the export pivot on `feat/azure-port` (manual `az` block in "Rollout steps" → smoke test → commit)
@@ -81,7 +81,7 @@ webhook-secret
 | A8 | Migration script + CI/CD | ⬜ Pending — `migrate_aws_to_azure.py` is a stub; deploy-azure.yml not written |
 | A9 | README + multi-cloud framing | ✅ Done — top-level README + azure/README.md (commit `9231d52`) |
 | A10 | End-to-end smoke test | 🟡 Mostly done — webhook + scheduler verified; final exporter→Excel walk-through pending the B1 rollout |
-| B1 | **Export pivot** (Power Automate → Blob CSV + local openpyxl) | 🟢 Code complete (this session), uncommitted, rollout + smoke test pending |
+| B1 | **Export pivot** (Power Automate → Blob CSV + local openpyxl) | ✅ Done — code commit `f64207e`, manual `az` rollout applied 2026-04-30, smoke test green: queued message → CSV in `attendance` container → local script generated `Attendance.xlsx` cleanly |
 
 ---
 
@@ -370,8 +370,10 @@ The cloud pipeline still runs end-to-end (Telegram → Webhook → Cosmos → Qu
 One-time setup (in your local venv or global Python — same packages the Function App already lists, just installed locally for the script's process):
 
 ```powershell
-pip install openpyxl azure-data-tables azure-identity
+pip install openpyxl azure-data-tables azure-identity azure-keyvault-secrets
 ```
+
+`azure-keyvault-secrets` is required even though the script never reads from Key Vault — `shared/config.py` does a top-level `from azure.keyvault.secrets import SecretClient` that fires at import time. Cheaper to install the dep than to refactor config.py into Key-Vault-optional layers.
 
 Cold start, after `az login`:
 
