@@ -25,7 +25,7 @@ def category_labels() -> dict[str, str]:
     return {
         "sit_student": _STATIC_LABELS["sit_student"],
         "non_sit": _STATIC_LABELS["non_sit"],
-        "rental_skates": (
+        "rental_skates": "Rental skates (current SIT students only)" if config.BOOKINGS_ENABLED else (
             f"I need rental skates! "
             f"(Please dm @{config.rental_skates_handle()} to let us know your skate size in EU) "
             f"Also inform us if you need guards!"
@@ -57,7 +57,7 @@ def build_poll_text(session: dict, responses: list[dict]) -> str:
     for r in responses:
         cat = r.get("category")
         if cat in by_cat:
-            by_cat[cat].append(r.get("first_name", ""))
+            by_cat[cat].append(str(r.get("first_name") or r.get('telegram_id', ''))[:80].replace('\n', ' '))
 
     total = len({r["telegram_id"] for r in responses})
 
@@ -72,7 +72,19 @@ def build_poll_text(session: dict, responses: list[dict]) -> str:
     for cat_key in CATEGORY_KEYS:
         names = by_cat[cat_key]
         lines.append(f"{labels[cat_key]}: ({len(names)} \U0001f465)")
-        lines.extend(names)
+        # Keep all counts accurate while bounding names below Telegram's 4096
+        # character limit, including worst-case UTF-16 emoji names.
+        shown = []
+        budget = 700
+        for name in names:
+            cost = len(name.encode('utf-16-le')) // 2 + 1
+            if cost > budget:
+                break
+            shown.append(name)
+            budget -= cost
+        lines.extend(shown)
+        if len(shown) < len(names):
+            lines.append(f'... and {len(names) - len(shown)} more')
         lines.append("")
     lines.append(f"\U0001f465 {total} {'person' if total == 1 else 'people'} responded")
     return "\n".join(lines)
@@ -86,6 +98,8 @@ def build_keyboard(session_id: str) -> dict:
         "inline_keyboard": [
             [{"text": _STATIC_LABELS["sit_student"], "callback_data": f"vote:{session_id}:sit_student"}],
             [{"text": _STATIC_LABELS["non_sit"], "callback_data": f"vote:{session_id}:non_sit"}],
-            [{"text": "I need rental skates!", "callback_data": f"vote:{session_id}:rental_skates"}],
+            [({"text": "I need rental skates!", "url": f"https://t.me/{config.BOT_USERNAME}?start=rent_{session_id}"}
+              if config.BOOKINGS_ENABLED and config.BOT_USERNAME else
+              {"text": "I need rental skates!", "callback_data": f"vote:{session_id}:rental_skates"})],
         ],
     }

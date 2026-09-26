@@ -33,6 +33,9 @@ KEY_VAULT_URL = os.environ["KEY_VAULT_URL"]       # e.g. https://skatebot-prod-k
 # ── Env vars (optional, with defaults) ──────────────────────────────────────
 
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Singapore")
+BOOKINGS_ENABLED = os.environ.get("BOOKINGS_ENABLED", "false").lower() == "true"
+RULES_FORM_URL = os.environ.get("RULES_FORM_URL", "")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 
 # Storage Queue used by webhook+scheduler to hand off export jobs to exporter.
 # Format: https://<storage-account>.queue.core.windows.net/
@@ -84,6 +87,20 @@ def group_chat_id() -> int:
     return int(_get_secret("group-chat-id"))
 
 
+def attendance_poll_chat_id() -> int:
+    """Telegram chat ID used for attendance poll posts.
+
+    Falls back to the historical group-chat-id secret so existing deployments
+    keep working until the dedicated secret is populated.
+    """
+    try:
+        raw = _get_secret("attendance-poll-chat-id")
+    except ResourceNotFoundError:
+        return group_chat_id()
+    raw = (raw or "").strip()
+    return int(raw) if raw else group_chat_id()
+
+
 def group_topic_id() -> int | None:
     """Optional: message_thread_id of a topic inside the group's supergroup.
     None (or absent secret) = post to the default 'General' topic.
@@ -97,6 +114,19 @@ def group_topic_id() -> int | None:
         return None
     raw = (raw or "").strip()
     return int(raw) if raw else None
+
+
+def attendance_poll_topic_id() -> int | None:
+    """Optional topic/thread ID used for attendance poll posts.
+
+    Falls back to group-topic-id for backwards compatibility.
+    """
+    try:
+        raw = _get_secret("attendance-poll-topic-id")
+    except ResourceNotFoundError:
+        return group_topic_id()
+    raw = (raw or "").strip()
+    return int(raw) if raw else group_topic_id()
 
 
 def rental_skates_handle() -> str:

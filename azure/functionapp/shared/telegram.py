@@ -24,10 +24,14 @@ def _call(method: str, **params) -> dict:
     params = {k: v for k, v in params.items() if v is not None}
     with httpx.Client(timeout=_DEFAULT_TIMEOUT) as client:
         r = client.post(_API.format(token=config.bot_token(), method=method), json=params)
-    r.raise_for_status()
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError:
+        r.raise_for_status()
+        raise
     if not data.get("ok"):
         raise RuntimeError(f"Telegram {method} failed: {data}")
+    r.raise_for_status()
     return data["result"]
 
 
@@ -77,6 +81,19 @@ def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
 
 def get_file(file_id: str) -> dict:
     return _call("getFile", file_id=file_id)
+
+
+def delete_message(chat_id: int, message_id: int) -> bool:
+    """Telegram limits message deletion (usually <48h); caller handles fallback.
+
+    API: https://core.telegram.org/bots/api#deletemessage
+    """
+    try:
+        return _call('deleteMessage', chat_id=chat_id, message_id=message_id)
+    except RuntimeError as exc:
+        if 'message to delete not found' in str(exc).lower():
+            return True  # An earlier attempt already removed this exact message.
+        raise
 
 
 def download_file(file_path: str, dest: str) -> None:

@@ -94,6 +94,11 @@ resource "azurerm_linux_function_app" "main" {
 
     TIMEZONE = var.scheduler_timezone
 
+    # Rules registry must be imported before enabling bookings in a new environment.
+    BOOKINGS_ENABLED = "true"
+    BOT_USERNAME     = "SITSkateClubBot"
+    RULES_FORM_URL   = "https://forms.cloud.microsoft/r/Q9fETRjdMq"
+
     TABLE_MEMBERS   = azurerm_cosmosdb_table.members.name
     TABLE_SESSIONS  = azurerm_cosmosdb_table.sessions.name
     TABLE_RESPONSES = azurerm_cosmosdb_table.responses.name

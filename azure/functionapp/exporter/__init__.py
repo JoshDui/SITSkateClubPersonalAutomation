@@ -97,6 +97,12 @@ def main(msg: func.QueueMessage) -> None:
 
     csv_bytes = _build_csv(session, attendees)
     blob_name = f"{session['session_date']}_{session_id}.csv"
+    # Recheck after building in case an admin deleted the session meanwhile.
+    # This does not retract a previously uploaded report or a running upload.
+    current_session = db.get_session(session_id)
+    if current_session is None or current_session.get('skipped') or current_session.get('exported'):
+        log.info('Export cancelled after state recheck for session %s', session_id)
+        return
     _upload_csv_to_blob(blob_name, csv_bytes)
     db.mark_session_exported(session_id)
 

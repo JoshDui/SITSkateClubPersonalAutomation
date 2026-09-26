@@ -38,6 +38,11 @@ def _cell(row, idx):
 
 
 def import_from_file(path: str) -> dict:
+    from shared.registry_import import import_from_file as import_registry
+    return import_registry(path)
+
+
+def _legacy_import_from_file(path: str) -> dict:
     """Read the xlsx and upsert members. Returns summary counts."""
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.worksheets[0]

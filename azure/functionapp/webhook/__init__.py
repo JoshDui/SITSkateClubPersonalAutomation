@@ -22,13 +22,13 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta, timezone
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import azure.functions as func
 from azure.identity import DefaultAzureCredential
 from azure.storage.queue import QueueClient, TextBase64EncodePolicy
-
 from shared import config, db, importer, poll, telegram
 
 log = logging.getLogger("webhook")
@@ -68,7 +68,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         log.info("update_id=%s keys=%s", body.get("update_id"), list(body.keys()))
 
         if "callback_query" in body:
-            _handle_callback(body["callback_query"])
+            _handle_callback(body["callback_query"], body.get("update_id", -1))
         elif "message" in body:
             _handle_message(body["message"])
 
@@ -77,7 +77,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         log.exception("Webhook handler failed.")
         # Return 200 anyway — a 5xx makes Telegram retry, which usually makes
         # things worse. We've logged the failure; App Insights alarm will fire.
-        return _resp(200, "error-logged")
+        is_booking = (locals().get('body', {}).get('callback_query', {}).get('data', '').startswith(('r:', 'vote:'))
+                      and getattr(config, 'BOOKINGS_ENABLED', False))
+        return _resp(503 if is_booking else 200, "error-logged")
 
 
 # ── Auth + response helpers ─────────────────────────────────────────────────
@@ -94,7 +96,7 @@ def _resp(code: int, body: str) -> func.HttpResponse:
 # ── Message dispatch (commands) ─────────────────────────────────────────────
 
 def _handle_message(msg: dict) -> None:
-    text = (msg.get("text") or "").strip()
+    text = (msg.get("text") or msg.get("caption") or "").strip()
     user = msg.get("from") or {}
     chat = msg.get("chat") or {}
     user_id = user.get("id")
@@ -105,6 +107,17 @@ def _handle_message(msg: dict) -> None:
     cmd, _, args_str = text.partition(" ")
     cmd = cmd.split("@", 1)[0].lstrip("/").lower()
     args = args_str.split() if args_str else []
+
+    if cmd == 'start' and getattr(config, 'BOOKINGS_ENABLED', False):
+        if chat.get('type') != 'private' or chat.get('id') != user_id:
+            return
+        from shared import booking_flow
+        if args and args[0].startswith(('rent_', 'rules_')):
+            prefix, sid = args[0].split('_', 1)
+            booking_flow.start(user, sid, rules_only=prefix == 'rules')
+        else:
+            telegram.send_message(chat['id'], 'Use the rental button on your training session poll to book skates.')
+        return
 
     if user_id not in config.admin_ids():
         telegram.send_message(chat["id"], "⛔ Admin only.")
@@ -126,7 +139,7 @@ def _cmd_sendpoll(msg: dict, args: list[str]) -> None:
         start_time=config.DEFAULT_SESSION_START,
         end_time=config.DEFAULT_SESSION_END,
         location=config.DEFAULT_SESSION_LOCATION,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
     _send_poll(session_id)
     _enqueue_export(session_id)
@@ -135,11 +148,11 @@ def _cmd_sendpoll(msg: dict, args: list[str]) -> None:
     # invoked from the configured group. If invoked from a DM, reply in the
     # DM as before — Telegram rejects message_thread_id outside supergroups.
     chat_id = msg["chat"]["id"]
-    in_group = chat_id == config.group_chat_id()
+    in_group = chat_id == config.attendance_poll_chat_id()
     telegram.send_message(
         chat_id,
         f"✅ Poll sent for session on {session_date}. (Session ID: {session_id})",
-        message_thread_id=config.group_topic_id() if in_group else None,
+        message_thread_id=config.attendance_poll_topic_id() if in_group else None,
     )
 
 
@@ -231,7 +244,10 @@ def _cmd_summary(msg: dict, args: list[str]) -> None:
 
 
 def _cmd_importmembers(msg: dict, args: list[str]) -> None:
-    doc = msg.get("document")
+    if msg.get('chat', {}).get('type') != 'private':
+        telegram.send_message(msg['chat']['id'], 'Please import the registry in a private chat with the bot.')
+        return
+    doc = msg.get("document") or (msg.get('reply_to_message') or {}).get('document')
     if doc is None:
         telegram.send_message(
             msg["chat"]["id"],
@@ -254,11 +270,12 @@ def _cmd_importmembers(msg: dict, args: list[str]) -> None:
     try:
         telegram.download_file(file_path, tmp_path)
         counts = importer.import_from_file(tmp_path)
+    except ValueError as exc:
+        telegram.send_message(msg['chat']['id'], f'Import rejected: {exc}')
+        return
     finally:
-        try:
+        with suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
 
     total_in_db = db.count_members()
     telegram.send_message(
@@ -269,11 +286,79 @@ def _cmd_importmembers(msg: dict, args: list[str]) -> None:
         f"  Unchanged: {counts['unchanged']}\n"
         f"  Skipped:   {counts['skipped']} (missing name or handle)\n"
         f"  Rows read: {counts['total']}\n\n"
+        f"Acknowledged: {counts.get('acknowledged', 0)}; ambiguous: {counts.get('ambiguous', 0)}\n"
         f"Total members in database: {total_in_db}",
     )
 
 
+def _cmd_rentals(msg: dict, args: list[str]) -> None:
+    if msg.get('chat', {}).get('type') != 'private':
+        telegram.send_message(msg['chat']['id'], 'Please request the rental list in a private chat.')
+        return
+    from shared import booking_flow, rentals
+    session = db.get_session(args[0]) if args and _ULID_RE.fullmatch(args[0]) else db.get_latest_session()
+    if session is None:
+        telegram.send_message(msg['chat']['id'], 'No session found.')
+        return
+    state = booking_flow.state_for(session['id'])
+    stock = rentals.available(state)
+    lines = [f"Rentals: {session['session_date']} ({session['id']})", 'Remaining pairs: ' + ', '.join(f'{k}: {v}' for k, v in stock.items())]
+    for uid, person in state['people'].items():
+        rental = person.get('rental')
+        if rental:
+            lines.append(f"{person.get('first_name', uid)} (@{person.get('username') or 'no handle'}, ID {uid}): "
+                         f"EU {rental['requested']} -> {rental['allocated']}; guards {'Yes' if rental['guards'] else 'No'}")
+        if person.get('review'):
+            lines.append(f"REVIEW: {person.get('first_name', uid)} / ID {uid}: {person['review']}")
+    chunk = ''
+    for line in lines:
+        if len(chunk) + len(line) > 3500:
+            telegram.send_message(msg['chat']['id'], chunk)
+            chunk = ''
+        chunk += line + '\n'
+    if chunk:
+        telegram.send_message(msg['chat']['id'], chunk)
+
+
+def _cmd_linkmember(msg: dict, args: list[str]) -> None:
+    """Admin resolves changed/missing handles using an existing acknowledged entry."""
+    if msg.get('chat', {}).get('type') != 'private':
+        return
+    if len(args) != 2 or not args[0].isdigit() or not re.fullmatch(r'@?[A-Za-z][A-Za-z0-9_]{4,31}', args[1]):
+        telegram.send_message(msg['chat']['id'], 'Usage: /linkmember TELEGRAM_USER_ID REGISTERED_HANDLE')
+        return
+    from shared import booking_store
+    from azure.core.exceptions import ResourceExistsError
+    member = db.get_member(args[1])
+    if not member or not member.get('rules_acknowledged') or member.get('ambiguous'):
+        telegram.send_message(msg['chat']['id'], 'An unambiguous acknowledged registry entry is required.')
+        return
+    try:
+        db._members.create_entity({'PartitionKey': 'CLAIM', 'RowKey': member['username'], 'telegram_id': args[0]})
+    except ResourceExistsError:
+        claim = db._members.get_entity(partition_key='CLAIM', row_key=member['username'])
+        if claim['telegram_id'] != args[0]:
+            telegram.send_message(msg['chat']['id'], 'This registry entry is already linked to another Telegram account.')
+            return
+    booking_store.save_profile(int(args[0]), member_username=member['username'])
+    telegram.send_message(msg['chat']['id'], 'Registry entry linked. The user can check again.')
+
+
+def _cmd_sessions(msg: dict, args: list[str]) -> None:
+    from shared import session_admin
+    session_admin.list_sessions(msg, args)
+
+
+def _cmd_deletesession(msg: dict, args: list[str]) -> None:
+    from shared import session_admin
+    session_admin.delete_session(msg, args)
+
+
 _COMMAND_HANDLERS = {
+    "sessions": _cmd_sessions,
+    "deletesession": _cmd_deletesession,
+    "rentals": _cmd_rentals,
+    "linkmember": _cmd_linkmember,
     "sendpoll": _cmd_sendpoll,
     "skipsession": _cmd_skipsession,
     "setsession": _cmd_setsession,
@@ -284,12 +369,23 @@ _COMMAND_HANDLERS = {
 
 # ── Callback query (button tap) ─────────────────────────────────────────────
 
-def _handle_callback(cq: dict) -> None:
+def _handle_callback(cq: dict, update_id: int = -1) -> None:
     data = cq.get("data") or ""
-    telegram.answer_callback_query(cq["id"])  # clear the "loading" spinner quickly
+
+    if getattr(config, 'BOOKINGS_ENABLED', False):
+        from shared import booking_flow
+        if update_id < 0:
+            telegram.answer_callback_query(cq['id'], 'Missing update identifier. Please try again.')
+            return
+        if data.startswith('r:'):
+            booking_flow.callback(cq, update_id)
+        else:
+            booking_flow.attendance(cq, update_id)
+        return
 
     parts = data.split(":")
     if len(parts) != 3 or parts[0] != "vote":
+        telegram.answer_callback_query(cq["id"], "This button is not recognized.")
         return
     session_id, category = parts[1], parts[2]
 
@@ -298,16 +394,23 @@ def _handle_callback(cq: dict) -> None:
     # break out of the filter literal.
     if not _ULID_RE.match(session_id) or category not in poll.CATEGORY_KEYS:
         log.warning("Rejected callback with invalid session_id/category: %r", data)
+        telegram.answer_callback_query(cq["id"], "This poll button is no longer valid.")
         return
 
     user = cq.get("from") or {}
     user_id = user.get("id")
     if user_id is None:
         log.warning("Callback missing from.id — dropping (would corrupt shared 'None' row).")
+        telegram.answer_callback_query(cq["id"], "Could not identify your Telegram account.")
         return
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
 
-    db.toggle_response(
+    session = db.get_session(session_id)
+    if session is None:
+        telegram.answer_callback_query(cq['id'], 'This session no longer exists.')
+        return
+
+    added = db.toggle_response(
         session_id=session_id,
         telegram_id=user_id,
         username=user.get("username"),
@@ -318,6 +421,7 @@ def _handle_callback(cq: dict) -> None:
 
     session = db.get_session(session_id)
     if session is None:
+        telegram.answer_callback_query(cq["id"], "This session no longer exists.")
         return
 
     responses = db.get_responses(session_id)
@@ -325,14 +429,21 @@ def _handle_callback(cq: dict) -> None:
     chat_id = (message.get("chat") or {}).get("id")
     message_id = message.get("message_id")
     if chat_id is None or message_id is None:
+        telegram.answer_callback_query(cq["id"], "Recorded, but I could not update this message.")
         return
 
-    telegram.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=poll.build_poll_text(session, responses),
-        reply_markup=poll.build_keyboard(session_id),
-    )
+    try:
+        telegram.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=poll.build_poll_text(session, responses),
+            reply_markup=poll.build_keyboard(session_id),
+        )
+    except Exception:
+        log.exception("Recorded callback but failed to edit poll message.")
+        telegram.answer_callback_query(cq["id"], "Recorded, but I could not update the poll message.")
+        return
+    telegram.answer_callback_query(cq["id"], "Added." if added else "Removed.")
 
 
 # ── Poll send + export-job orchestration ────────────────────────────────────
@@ -343,10 +454,10 @@ def _send_poll(session_id: str) -> None:
     if session is None:
         return
     result = telegram.send_message(
-        chat_id=config.group_chat_id(),
+        chat_id=config.attendance_poll_chat_id(),
         text=poll.build_poll_text(session, []),
         reply_markup=poll.build_keyboard(session_id),
-        message_thread_id=config.group_topic_id(),
+        message_thread_id=config.attendance_poll_topic_id(),
     )
     db.set_poll_message_id(session_id, result["message_id"])
 

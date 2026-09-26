@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Key Vault + 6 secrets (mirroring the AWS SSM Parameter Store layout)
+# Key Vault secrets: core bot secrets plus optional topic-routing secrets.
 #
 # Authentication mode: RBAC (not legacy access policies). Easier to audit,
 # integrates with the Function App's System-Assigned MI via standard role
@@ -42,7 +42,7 @@ resource "azurerm_role_assignment" "tf_kv_officer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
-# ── 6 secrets matching the AWS SSM keys ──────────────────────────────────
+# Core secrets matching the AWS SSM keys.
 
 resource "azurerm_key_vault_secret" "bot_token" {
   name         = "bot-token"
@@ -91,6 +91,20 @@ resource "azurerm_key_vault_secret" "rental_skates_handle" {
 resource "azurerm_key_vault_secret" "group_topic_id" {
   name         = "group-topic-id"
   value        = var.telegram_group_topic_id
+  key_vault_id = azurerm_key_vault.main.id
+  depends_on   = [azurerm_role_assignment.tf_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "attendance_poll_chat_id" {
+  name         = "attendance-poll-chat-id"
+  value        = var.telegram_attendance_poll_chat_id
+  key_vault_id = azurerm_key_vault.main.id
+  depends_on   = [azurerm_role_assignment.tf_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "attendance_poll_topic_id" {
+  name         = "attendance-poll-topic-id"
+  value        = var.telegram_attendance_poll_topic_id
   key_vault_id = azurerm_key_vault.main.id
   depends_on   = [azurerm_role_assignment.tf_kv_officer]
 }

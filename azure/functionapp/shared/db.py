@@ -29,10 +29,9 @@ import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from azure.data.tables import TableServiceClient, UpdateMode
 from azure.core.exceptions import ResourceNotFoundError
+from azure.data.tables import EdmType, EntityProperty, TableServiceClient, UpdateMode
 from azure.identity import DefaultAzureCredential
-
 from shared import config
 
 _credential = DefaultAzureCredential()
@@ -72,6 +71,11 @@ def _entity_to_dict(entity) -> dict:
     document key), so we cannot store it directly — we re-attach it on
     read to preserve the AWS-compatible ``session["id"]`` accessor."""
     d = dict(entity)
+    # Azure's INT64 decoder returns EntityProperty rather than a plain integer.
+    # Keep IDs usable in Telegram JSON payloads and equality checks after reads.
+    for key, value in d.items():
+        if isinstance(value, EntityProperty) and value.edm_type == EdmType.INT64:
+            d[key] = int(value.value)
     if d.get("PartitionKey") == _SESSION_PK:
         d["id"] = d.get("RowKey")
     d.pop("PartitionKey", None)
@@ -174,12 +178,35 @@ def create_session(
     return session_id
 
 
-def get_session(session_id: str) -> dict | None:
+def get_session(session_id: str, *, include_deleted: bool = False) -> dict | None:
     try:
         entity = _sessions.get_entity(partition_key=_SESSION_PK, row_key=session_id)
     except ResourceNotFoundError:
         return None
+    if entity.get('deleted') and not include_deleted:
+        return None
     return _entity_to_dict(entity)
+
+
+def list_sessions_for_admin() -> list[dict]:
+    """Visible sessions, newest date/creation first; retained tombstones excluded."""
+    items = [_entity_to_dict(e) for e in _sessions.query_entities(
+        f"PartitionKey eq '{_SESSION_PK}'") if not e.get('deleted')]
+    return sorted(items, key=lambda e: (e.get('session_date', ''),
+                  e.get('created_at', ''), e.get('id', '')), reverse=True)
+
+
+def mark_session_deleted(session_id: str, admin_id: int) -> None:
+    """Recoverable removal. MERGE preserves historical data; never creates a row."""
+    session = get_session(session_id, include_deleted=True)
+    if session is None:
+        raise ValueError('Session not found.')
+    if session.get('deleted'):
+        return
+    _sessions.update_entity({
+        'PartitionKey': _SESSION_PK, 'RowKey': session_id,
+        'deleted': True, 'deleted_at': _now_iso_utc(), 'deleted_by': str(admin_id),
+    }, mode=UpdateMode.MERGE)
 
 
 def get_latest_session() -> dict | None:
@@ -187,11 +214,10 @@ def get_latest_session() -> dict | None:
     Cosmos Table API has no native sorting on non-key properties, so we scan
     the SESSION partition and pick the max client-side. Fine at our scale
     (~52 sessions/year)."""
-    items = list(_sessions.query_entities(f"PartitionKey eq '{_SESSION_PK}'"))
+    items = list_sessions_for_admin()
     if not items:
         return None
-    latest = max(items, key=lambda e: e.get("session_date", ""))
-    return _entity_to_dict(latest)
+    return items[0]
 
 
 def set_poll_message_id(session_id: str, message_id: int) -> None:
@@ -199,7 +225,10 @@ def set_poll_message_id(session_id: str, message_id: int) -> None:
         entity={
             "PartitionKey": _SESSION_PK,
             "RowKey": session_id,
-            "poll_message_id": message_id,
+            "poll_message_id": EntityProperty(message_id, EdmType.INT64),
+            # SDK defaults Python ints to INT32; supergroup IDs exceed its range.
+            # https://learn.microsoft.com/python/api/azure-data-tables/azure.data.tables.entityproperty
+            "poll_chat_id": EntityProperty(config.attendance_poll_chat_id(), EdmType.INT64),
         },
         mode=UpdateMode.MERGE,
     )
@@ -244,7 +273,7 @@ def list_unexported_sessions() -> list[dict]:
     filt = (
         f"PartitionKey eq '{_SESSION_PK}' and skipped eq 0 and exported eq 0"
     )
-    return [_entity_to_dict(e) for e in _sessions.query_entities(filt)]
+    return [_entity_to_dict(e) for e in _sessions.query_entities(filt) if not e.get('deleted')]
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -264,7 +293,7 @@ def list_sessions_since(since_date: str, include_skipped: bool = False) -> list[
     if not include_skipped:
         parts.append("skipped eq 0")
     filt = " and ".join(parts)
-    items = [_entity_to_dict(e) for e in _sessions.query_entities(filt)]
+    items = [_entity_to_dict(e) for e in _sessions.query_entities(filt) if not e.get('deleted')]
     return sorted(items, key=lambda r: r.get("session_date", ""))
 
 
@@ -279,7 +308,7 @@ def get_upcoming_session(within_days: int = 7) -> dict | None:
         f"and session_date ge '{today.isoformat()}' "
         f"and session_date le '{end.isoformat()}'"
     )
-    items = list(_sessions.query_entities(filt))
+    items = [e for e in _sessions.query_entities(filt) if not e.get('deleted')]
     if not items:
         return None
     earliest = min(items, key=lambda e: e.get("session_date", ""))
@@ -335,7 +364,7 @@ def toggle_response(
     return True
 
 
-def get_responses(session_id: str) -> list[dict]:
+def get_legacy_responses(session_id: str) -> list[dict]:
     items = [
         _entity_to_dict(e)
         for e in _responses.query_entities(f"PartitionKey eq '{session_id}'")
@@ -343,9 +372,19 @@ def get_responses(session_id: str) -> list[dict]:
     return sorted(items, key=lambda r: r.get("responded_at", ""))
 
 
+def get_responses(session_id: str) -> list[dict]:
+    from shared import booking_store, rentals
+    state = booking_store.read(session_id)
+    return rentals.responses(state, session_id) if state is not None else get_legacy_responses(session_id)
+
+
 def get_responses_by_category(session_id: str, category: str) -> list[dict]:
     """RowKey begins with '{category}:'. The OData equivalent of begins_with
     is a lex-range; the next codepoint after ':' (0x3A) is ';' (0x3B)."""
+    return [r for r in get_responses(session_id) if r.get('category') == category]
+
+
+def _legacy_get_responses_by_category(session_id: str, category: str) -> list[dict]:
     filt = (
         f"PartitionKey eq '{session_id}' "
         f"and RowKey ge '{category}:' "

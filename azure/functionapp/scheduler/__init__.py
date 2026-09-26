@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import azure.functions as func
 from azure.identity import DefaultAzureCredential
 from azure.storage.queue import QueueClient, TextBase64EncodePolicy
-
 from shared import config, db, poll, telegram
 
 log = logging.getLogger("scheduler")
@@ -65,7 +64,7 @@ def main(timer: func.TimerRequest) -> None:
             start_time=config.DEFAULT_SESSION_START,
             end_time=config.DEFAULT_SESSION_END,
             location=config.DEFAULT_SESSION_LOCATION,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
         log.info("Created session %s for %s", session_id, session_date)
 
@@ -81,10 +80,10 @@ def _send_poll(session_id: str) -> None:
     if session is None:
         return
     result = telegram.send_message(
-        chat_id=config.group_chat_id(),
+        chat_id=config.attendance_poll_chat_id(),
         text=poll.build_poll_text(session, []),
         reply_markup=poll.build_keyboard(session_id),
-        message_thread_id=config.group_topic_id(),
+        message_thread_id=config.attendance_poll_topic_id(),
     )
     db.set_poll_message_id(session_id, result["message_id"])
 

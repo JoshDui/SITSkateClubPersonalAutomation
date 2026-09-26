@@ -139,7 +139,30 @@ variable "telegram_group_topic_id" {
   default     = ""
 }
 
-# ── Override hooks for `terraform import` of existing manual deployment ────
+variable "telegram_attendance_poll_chat_id" {
+  description = <<-EOT
+    Optional dedicated Telegram chat ID for attendance polls. Empty string uses
+    telegram_group_chat_id. Stored as Key Vault secret
+    'attendance-poll-chat-id'.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "telegram_attendance_poll_topic_id" {
+  description = <<-EOT
+    Optional dedicated message_thread_id for attendance polls. Empty string uses
+    telegram_group_topic_id. Store the thread ID for "SIT IS Announcements &
+    Polls" here when the poll destination is a Telegram forum topic.
+    Stored as Key Vault secret 'attendance-poll-topic-id'.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# Override hooks for `terraform import` of existing manual deployment.
 # When importing the resources we already provisioned via az CLI, set these
 # to the actual deployed names so Terraform binds to them rather than
 # generating fresh random suffixes.
