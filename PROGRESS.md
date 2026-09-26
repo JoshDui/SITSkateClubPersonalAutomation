@@ -2,12 +2,15 @@
 
 Session handoff document. Snapshot of where deployment stands so future-Joshua can resume without re-reading the whole chat history.
 
-**Last updated:** 2026-04-29
-**Branch:** `main` (tracking `origin/main`) — AWS-only; Azure work lives on `feat/azure-port`.
-**Last commit on main:** `44dd0e8` — "Add build.ps1 -- Windows equivalent of make package"
-**Region:** `ap-southeast-1` (Singapore)
+**Last updated:** 2026-05-01
+**Branch:** `main` (tracking `origin/main`) — multi-cloud post-merge.
+**Last commit on main:** `1fa5ad6` — "Merge pull request #1 from JoshDui/feat/azure-port"
+**Pre-merge AWS commit:** `44dd0e8` — "Add build.ps1 -- Windows equivalent of make package"
+**Region (AWS):** `ap-southeast-1` (Singapore) · **Region (Azure):** `japaneast`
 
-> **Multi-cloud scope** (added 2026-04-29): the bot has been parallel-ported to Azure on `feat/azure-port` over the last week. AWS remains the original/default; Azure is a portfolio piece. See `azure/PROGRESS.md` for the Azure-side handoff. The plan is to merge `feat/azure-port` → `main` once its export pivot lands (Path A), then branch `feat/aws-export-pivot` off the new `main` to mirror the pivot on S3 (the AWS exporter has the same Power Automate Premium dependency and needs the same fix).
+> **Multi-cloud scope** (merged 2026-04-30 via PR #1): the bot has been parallel-ported to Azure. Both clouds now live on `main`. **Azure is the active deployment** — Telegram webhook is registered to the Azure Function URL, and the bot processes real traffic via Azure (Cosmos DB + Function App + Blob CSV export). AWS deployment exists in code + provisioned resources, but is dormant: SSM parameters unpopulated, webhook not registered. See `azure/PROGRESS.md` for the Azure-side handoff including the full B1 export pivot rollout log.
+>
+> **What's left on AWS:** populate SSM (M5, ~15 min), then mirror the Azure B1 export pivot on S3 (`feat/aws-export-pivot` off main, ~1 hr). AWS new-account verification cleared 2026-04-29, so both items are unblocked. The AWS exporter currently still POSTs to Power Automate which is dead in this Microsoft tenant (same Premium-licensing wall as Azure hit) — same fix needed.
 
 ---
 
@@ -212,6 +215,8 @@ git log --oneline -n 5         # recent commits
 ## Related docs
 
 - [`SETUP.md`](./SETUP.md) — original manual-steps checklist (pre-deploy guide)
-- [`README.md`](./README.md) — architecture + design rationale
+- [`README.md`](./README.md) — multi-cloud architecture + design rationale + AWS↔Azure mapping
+- [`azure/PROGRESS.md`](./azure/PROGRESS.md) — full Azure deployment session log (16 errors + B1 export pivot rollout log)
+- [`azure/README.md`](./azure/README.md) — Azure-specific deploy/teardown + status
 - [`../skatetelegrambot/PLAN.md`](../skatetelegrambot/PLAN.md) — original Phase 3 plan + Power Automate payload spec
 - [`../skatetelegrambot/Progress.md`](../skatetelegrambot/Progress.md) — Phase 3 (monolithic version) progress log

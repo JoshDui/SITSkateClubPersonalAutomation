@@ -119,12 +119,23 @@ def _handle_message(msg: dict) -> None:
             telegram.send_message(chat['id'], 'Use the rental button on your training session poll to book skates.')
         return
 
+    # Authorization uses Telegram's authenticated sender ID, never a handle,
+    # display name, forwarded origin, or group-admin status. Menus are not ACLs.
+    if (type(user_id) is not int or user_id <= 0 or user.get('is_bot')
+            or msg.get('sender_chat')):
+        return
+
     if user_id not in config.admin_ids():
         telegram.send_message(chat["id"], "⛔ Admin only.")
         return
 
     handler = _COMMAND_HANDLERS.get(cmd)
     if handler is None:
+        return
+    # All admin output stays in the authorized account's own private chat.
+    # /sendpoll still intentionally publishes the poll in the configured group.
+    if chat.get('type') != 'private' or chat.get('id') != user_id:
+        telegram.send_message(chat['id'], 'Please use admin commands in your private chat with the bot.')
         return
     handler(msg, args)
 

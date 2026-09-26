@@ -1,16 +1,18 @@
 # Azure Deployment
 
-Parallel Azure implementation of the SIT Inline Skate Bot, deployed alongside the AWS version on `main`.
+Parallel Azure implementation of the SIT Inline Skate Bot, deployed alongside the AWS version. Both clouds now live on `main` after the multi-cloud port merged via PR #1 (commit `1fa5ad6`, 2026-04-30).
 
 ## Status
 
-Deployed and end-to-end validated on `feat/azure-port` branch (2026-04-28). AWS deployment on `main` is unaffected.
+Deployed and end-to-end validated. Azure is the **active deployment** (Telegram webhook is currently registered to the Azure Function URL); AWS code is parallel-deployed but dormant pending M5 + the AWS export pivot.
 
 - ✅ Webhook → Cosmos write → Telegram poll round-trip verified
 - ✅ Scheduler manual-trigger idempotency verified
-- ✅ Exporter Queue Trigger fires on visibility expiry, payload built, Power Automate POST path exercised
-- ⬜ Terraform IaC (currently provisioned imperatively via `az` CLI)
-- ⬜ GitHub Actions deploy pipeline with OIDC federation
+- ✅ Exporter Queue Trigger fires on visibility expiry → uploads CSV to Blob Storage (`attendance/{date}_{ulid}.csv`) — pivoted from Power Automate POST in B1, see PROGRESS.md "Attendance Export Pivot"
+- ✅ Local `azure/scripts/build_attendance_report.py` produces `Attendance.xlsx` from Cosmos via `az login`
+- ✅ Terraform `azurerm` IaC code complete (`azure/infra/terraform/`) — `terraform validate` clean
+- ⬜ Terraform import of existing manual deployment (`import.ps1` written, not yet run)
+- ⬜ GitHub Actions deploy pipeline with OIDC federation (A8)
 
 Detailed session handoff with all 16 errors hit during deployment: [`PROGRESS.md`](./PROGRESS.md).
 
@@ -18,7 +20,7 @@ Detailed session handoff with all 16 errors hit during deployment: [`PROGRESS.md
 - Resource Group: `rg-skatebot-prod`
 - Function App: `skatebot-prod-azure-32441` (Linux Consumption, Python 3.12)
 - Cosmos DB Table API: free tier, 3 tables (`members`, `sessions`, `responses`)
-- Key Vault: `skatebot-prod-kv-29024` with 6 secrets
+- Key Vault: `skatebot-prod-kv-29024` with core bot secrets plus optional topic-routing secrets
 - Storage Queue: `export-queue` on the Function App's Storage Account
 - Application Insights: linked to Function App, queries via Azure Portal Logs blade
 
@@ -35,6 +37,7 @@ Detailed session handoff with all 16 errors hit during deployment: [`PROGRESS.md
 | CloudWatch Logs + Alarms | Application Insights + Azure Monitor |
 | AWS Budgets | Cost Management Budget |
 | IAM Roles | System-Assigned Managed Identity + RBAC |
+| Power Automate webhook (still in AWS, blocked by Premium) | Blob Storage CSV + local `openpyxl` script (B1 — free, no Premium) |
 
 ## Layout
 
@@ -49,8 +52,10 @@ azure/
 │   └── requirements.txt
 ├── infra/terraform/     # azurerm provider IaC
 ├── scripts/
-│   ├── setwebhook.py
-│   └── migrate_aws_to_azure.py
+│   ├── setwebhook.py                  # Register the Telegram webhook to the Azure Function URL
+│   ├── migrate_aws_to_azure.py        # (stub) one-shot DynamoDB → Cosmos copy
+│   └── build_attendance_report.py     # On-demand Excel report from live Cosmos data
+├── PROGRESS.md          # Session-handoff log + 16 errors + B1 rollout log
 └── tests/
 ```
 

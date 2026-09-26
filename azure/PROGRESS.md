@@ -1,9 +1,15 @@
 # Azure Deployment Progress
 
-**Branch:** `feat/azure-port` (off `main`)
-**Last commit:** `f64207e` — B1: Pivot attendance export from Power Automate to Blob CSV + local Excel
+**Branch:** `main` (post-merge — `feat/azure-port` preserved on origin for reference)
+**Last commit:** `1fa5ad6` — Merge pull request #1 from JoshDui/feat/azure-port
+**Pivot commits:** `f64207e` (B1) + `43a1dbb` (B1 follow-up: gitignore, missing dep, smoke-test note)
 **Last updated:** 2026-05-01
-**Status:** Export pivot **shipped + verified end-to-end**. Manual `az` rollout applied 2026-04-30 (container, app settings, FA Blob role, user Cosmos role). Function App redeployed with the new exporter; smoke test passed: a queued message → exporter → CSV in `attendance` container → `build_attendance_report.py` → `Attendance.xlsx` open-able in Excel. Branch ready for merge to `main` (Path A step 2).
+**Status:** Multi-cloud port **shipped to `main`** via PR #1 (https://github.com/JoshDui/SITSkateClubPersonalAutomation/pull/1, merged 2026-04-30T22:50Z). Azure deployment is the live deployment and end-to-end verified: Telegram → Webhook → Cosmos → Queue → Exporter → Blob CSV → local `Attendance.xlsx`. AWS deployment remains parallel-deployed but dormant (M5 unpopulated; AWS exporter still POSTs to dead Power Automate URL and silently no-ops on the placeholder).
+
+**Branch strategy (Path A):**
+1. ✅ Roll out the export pivot on `feat/azure-port` (manual `az` block — done 2026-04-30, see "Session Log: B1 Pivot Rollout" below)
+2. ✅ Open `feat/azure-port` → `main` PR; merge once Azure is fully green (PR #1, merged 2026-04-30)
+3. ⏭️ From the new `main`, branch `feat/aws-export-pivot` to mirror the Blob/CSV pattern on S3 for the AWS Lambda exporter — AWS verification cleared 2026-04-29, so M5 + the AWS pivot are unblocked when ready.
 
 **Branch strategy (Path A, locked in 2026-04-29):**
 1. Roll out the export pivot on `feat/azure-port` (manual `az` block in "Rollout steps" → smoke test → commit)
@@ -232,9 +238,22 @@ Then in the smoke test payload:
 
 ---
 
-## Current Blocker
+## Current State (post-merge, 2026-05-01)
 
-**Pending verification** — the synthetic-test ID issue (error #15) was identified. The next smoke test should use real `admin-ids` and `group-chat-id` values fetched from Key Vault. See "Resume Cold" step 5 for the corrected PowerShell block.
+No active blockers. All Azure milestones (A1–A10) plus the B1 export pivot are shipped on `main`. The bot is **live on Azure** and processing real Telegram traffic. Verified end-to-end:
+
+- Webhook receives Telegram updates, validates `X-Telegram-Bot-Api-Secret-Token`, writes to Cosmos
+- Button taps via inline keyboard create/delete `responses` rows correctly (Cosmos `#`-in-RowKey bug fixed via `:` separator, see error #16)
+- Scheduler timer trigger fires per NCRONTAB (Sunday 18:00 SGT); manual trigger creates `sessions` row + enqueues a 24h-delayed export message
+- Exporter Queue Trigger fires when message visibility expires; reads session + responses from Cosmos, builds CSV, uploads to Blob (replaces the dead Power Automate POST)
+- Local `azure/scripts/build_attendance_report.py` queries Cosmos via `az login` token and produces a valid `Attendance.xlsx` openable in Excel without an import wizard
+
+Pending follow-ups (not blocking):
+
+- **A8 — CI/CD**: `azure/scripts/migrate_aws_to_azure.py` is a stub; `.github/workflows/deploy-azure.yml` not yet written. Currently deploying via `func azure functionapp publish`.
+- **Terraform import**: existing Azure resources were provisioned manually pre-Terraform; the IaC code is in the repo (commit `8124bf7`) but not yet bound to the running deployment via `terraform import`. `azure/infra/terraform/import.ps1` does the import in one shot.
+- **AWS export pivot** (separate branch): Mirror B1 on S3 for the AWS exporter Lambda. Will land on `feat/aws-export-pivot` off the new `main` once started.
+- **AWS M5**: Populate SSM (via `scripts/bootstrap-ssm.ps1`), switch the Telegram webhook to the AWS Function URL via `setwebhook.py`, run a parallel smoke test. Note: only one Telegram webhook can be active per bot, so testing AWS means temporarily disabling Azure ingress.
 
 ---
 
@@ -303,7 +322,14 @@ Then in the smoke test payload:
    - Then wait 60–90s (error #14) and check App Insights via the portal.
    - On full success: a row appears in Cosmos `sessions` table (Data Explorer) AND a poll message lands in the Telegram group, plus a "✅ Poll sent for session on ..." reply.
 
-6. **Once webhook is green**, smoke-test scheduler (manual timer trigger) and exporter (enqueue with short visibility timeout). Then move to A7 (Terraform IaC).
+6. **Already verified** — webhook, scheduler, and exporter were all smoke-tested before the merge. To re-verify after a redeploy or infra change, follow steps 5 above (webhook), and the "Smoke test after rollout" section under "Attendance Export Pivot" for the Blob CSV + local Excel side.
+
+7. **To regenerate the local Excel report on demand:**
+   ```powershell
+   pip install openpyxl azure-data-tables azure-identity azure-keyvault-secrets   # one-time
+   python C:\UniPain\skatetelegrambot-aws\azure\scripts\build_attendance_report.py --since 2026-04-01
+   start .\Attendance.xlsx
+   ```
 
 ---
 
@@ -490,3 +516,188 @@ To re-trigger the exporter on an already-tested session without waiting for the 
 ### Dormant resources (kept intentionally)
 
 - `power-automate-url` Key Vault secret (placeholder value): unread by code now, but left in Terraform/Vault to avoid a Key Vault destroy-recreate. If a future deployment moves to a Premium tenant, the same secret slot can be re-populated and a one-line revert restores the POST path.
+
+---
+
+## Session Log: B1 Pivot Rollout (2026-04-30 / 2026-05-01)
+
+The exact sequence executed during this session, captured for reproducibility / disaster recovery / portfolio narrative. Run in PowerShell on Windows; variables persist within one window only (see error #10).
+
+### Phase 1 — Setup variables
+
+```powershell
+$RG = "rg-skatebot-prod"
+$FA = "skatebot-prod-azure-32441"
+$conn = az functionapp config appsettings list --name $FA --resource-group $RG `
+          --query "[?name=='AzureWebJobsStorage'].value | [0]" -o tsv
+if ($conn -match 'AccountName=([^;]+)') { $SA = $matches[1] }
+"Storage Acct  : $SA"
+```
+
+Result: `$SA = skatebotprod36863`
+
+### Phase 2 — Create the attendance Blob container
+
+```powershell
+az storage container create --account-name $SA --name attendance --auth-mode login
+```
+
+Result: `{"created": true}` — container ready.
+
+### Phase 3 — Set Function App app settings
+
+```powershell
+az functionapp config appsettings set --name $FA --resource-group $RG --settings `
+  "BLOB_ACCOUNT_URL=https://$SA.blob.core.windows.net" `
+  "ATTENDANCE_CONTAINER=attendance"
+```
+
+Result: app settings list dump includes the two new entries; FA restarts (~10s).
+
+Verification:
+
+```powershell
+az functionapp config appsettings list --name $FA --resource-group $RG `
+  --query "[?name=='BLOB_ACCOUNT_URL' || name=='ATTENDANCE_CONTAINER'].{name:name, value:value}" -o table
+```
+
+```
+Name                  Value
+--------------------  -----------------------------------------------
+BLOB_ACCOUNT_URL      https://skatebotprod36863.blob.core.windows.net
+ATTENDANCE_CONTAINER  attendance
+```
+
+### Phase 4 — Grant Storage Blob Data Contributor to the FA's MI
+
+```powershell
+$MI_PRINCIPAL = (az functionapp identity show --name $FA --resource-group $RG --query principalId -o tsv)
+$SA_ID = (az storage account show --name $SA --resource-group $RG --query id -o tsv)
+az role assignment create --assignee-object-id $MI_PRINCIPAL --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" --scope $SA_ID
+```
+
+Result: role assignment ID `6d752efc-6c37-43f7-a0a2-71877ec86776`. MI principalId `042969c3-2a1f-4e8e-b3d6-188010084984`.
+
+> **Footgun caught here**: the `--name $FA --resource-group $RG --query principalId -o tsv` chain wrapped during paste, so PowerShell saw a real newline after `-o` and parsed the rest as separate commands. `$MI_PRINCIPAL` was empty until re-run on a single line. Always collapse `az` invocations to one line when pasting from a long doc.
+
+### Phase 5 — Grant Cosmos DB data role to the running user (your AAD identity)
+
+Without this, `build_attendance_report.py` 403s on Cosmos reads — the FA's MI has the role, but your user does not by default.
+
+```powershell
+$COSMOS_ACCT = (az cosmosdb list --resource-group $RG --query "[0].name" -o tsv)
+$ME = (az ad signed-in-user show --query id -o tsv)
+az cosmosdb sql role assignment create --account-name $COSMOS_ACCT --resource-group $RG --scope "/" --role-definition-id 00000000-0000-0000-0000-000000000002 --principal-id $ME
+```
+
+Result: SQL role assignment ID `dc32fe6e-8ae2-4d23-9cd3-f9512227c98d`. Your principalId `b1935c29-1bdd-413f-89cb-d4b784108014`.
+
+### Phase 6 — Grant yourself Storage Queue + Blob roles (for `az storage message put` and `az storage blob list`)
+
+Discovered necessary mid-smoke-test when `--auth-mode login` returned 403 — control-plane access doesn't imply data-plane access.
+
+```powershell
+az role assignment create --assignee-object-id $ME --assignee-principal-type User --role "Storage Queue Data Contributor" --scope $SA_ID
+az role assignment create --assignee-object-id $ME --assignee-principal-type User --role "Storage Blob Data Contributor" --scope $SA_ID
+```
+
+Both succeeded; AAD propagation took ~15s.
+
+### Phase 7 — Redeploy Function App with the new exporter code
+
+```powershell
+cd C:\UniPain\skatetelegrambot-aws\azure\functionapp
+func azure functionapp publish $FA --python
+```
+
+Build steps observed (~3 min):
+1. Local zip created
+2. Uploaded to SCM endpoint
+3. Oryx remote build with Python 3.12.13
+4. `pip install` from `requirements.txt` — `azure-storage-blob 12.28.0` installed for the first time (and all other deps unchanged)
+5. squashfs artifact built (12.05 MB)
+6. Workers reset; functions list confirms all three triggers present:
+
+```
+Functions in skatebot-prod-azure-32441:
+    exporter - [queueTrigger]
+    scheduler - [timerTrigger]
+    webhook - [httpTrigger]
+        Invoke url: https://skatebot-prod-azure-32441.azurewebsites.net/api/webhook
+```
+
+> Local-vs-deployed Python version warning (`3.13.0` local vs `Python|3.12` deployed) is informational only — Oryx ran the build with 3.12 on its side. Local mismatch only matters if you run `func start` locally.
+
+### Phase 8 — Smoke test: cloud side
+
+1. Cosmos Data Explorer → `sessions` table → pick a row (used `01KQ8YWMBT0W28EDM7TR1XCKE8`, the most recent test session) → **Edit Entity** → set `exported = 0` → Update.
+
+2. Enqueue an export message:
+
+   ```powershell
+   $SESSION_ID = "01KQ8YWMBT0W28EDM7TR1XCKE8"
+   $payload = @{ session_id = $SESSION_ID } | ConvertTo-Json -Compress
+   $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+   az storage message put --queue-name export-queue --content $b64 --account-name $SA --auth-mode login --visibility-timeout 5
+   ```
+
+3. Wait ~30s, then list blobs:
+
+   ```powershell
+   az storage blob list --account-name $SA --container-name attendance --auth-mode login `
+     --query "[].{name:name, size:properties.contentLength, modified:properties.lastModified}" -o table
+   ```
+
+   Result: 4 CSVs in container — three from queue messages that had been hidden in the queue with stale 24h visibility timeouts and which the new exporter drained on first run, plus the one from this test:
+
+   ```
+   2026-04-28_01KQ8XHZNYKMEPTB9J39S8WD1N.csv  131  2026-04-29T10:30:42+00:00
+   2026-04-28_01KQ8XK9PSWG6RXFZFA80G8M5H.csv  131  2026-04-29T10:30:42+00:00
+   2026-04-28_01KQ8YBVR7ATXKH6QKND8N96PJ.csv  131  2026-04-29T10:30:42+00:00
+   2026-04-28_01KQ8YWMBT0W28EDM7TR1XCKE8.csv  131  2026-04-30T18:09:14+00:00   ← this test
+   ```
+
+   The same-second timestamps on the first three confirm Storage Queue's at-least-once delivery + the exporter's idempotent `exported`-flag design caught up automatically when the new code came online — exactly as designed.
+
+### Phase 9 — Smoke test: local side
+
+```powershell
+pip install openpyxl azure-data-tables azure-identity azure-keyvault-secrets   # one-time
+python C:\UniPain\skatetelegrambot-aws\azure\scripts\build_attendance_report.py --since 2026-04-01
+```
+
+Output:
+
+```
+  skip 2026-04-28 01KQ8XHZNYKMEPTB9J39S8WD1N — no responses.
+  skip 2026-04-28 01KQ8XK9PSWG6RXFZFA80G8M5H — no responses.
+  skip 2026-04-28 01KQ8YBVR7ATXKH6QKND8N96PJ — no responses.
+  skip 2026-04-28 01KQ8YWMBT0W28EDM7TR1XCKE8 — no responses.
+Wrote C:\UniPain\skatetelegrambot-aws\azure\functionapp\Attendance.xlsx: 1/5 sessions with attendance, 1 attendee-rows.
+```
+
+Excel opened cleanly without an import wizard (UTF-8 BOM working). 1 session had a real button-tap recorded (`01KQ8RSD5B066HMZF7Q3J0CK1Y` — the very first end-to-end test from way back); the other 4 were queue/exporter shape tests with no responses.
+
+> **Footgun caught**: original install line missed `azure-keyvault-secrets`. `shared/config.py` does a top-level `from azure.keyvault.secrets import SecretClient` even though the local script never reads from Key Vault. Cheaper to install the dep than to refactor config.py into Key-Vault-optional layers. Fixed in commit `43a1dbb`.
+
+### Phase 10 — Commit, push, PR, merge
+
+1. Pivot commit `f64207e` — 12 files (10 pivot + `out.json` + `scripts/bootstrap-ssm.ps1` notes), pushed
+2. Follow-up commit `43a1dbb` — `.gitignore` for generated reports, missing pip dep, smoke-test green note
+3. PR #1 opened via `gh pr create --base main --head feat/azure-port` — body covered summary, mapping table, verification, follow-ups
+4. PR merged via `gh pr merge 1 --merge` (branch preserved on origin) — merge commit `1fa5ad6`, fast-forward of 40 files / +3,638 / −95 lines onto `main`
+
+Local `main` synced via `git pull origin main`.
+
+### Final state at end of session
+
+| | |
+|---|---|
+| Repo branch | `main` |
+| Last commit | `1fa5ad6` (Merge pull request #1) |
+| Function App | `skatebot-prod-azure-32441` running B1 exporter (Blob CSV upload) |
+| Storage container | `attendance` exists, 4 CSVs present |
+| Telegram webhook | Pointed at Azure (`https://skatebot-prod-azure-32441.azurewebsites.net/api/webhook`) |
+| Local Excel report | `azure/functionapp/Attendance.xlsx` generated, gitignored |
+| AWS deployment | Resources exist (M4) but SSM unpopulated — M5 unblocked, deferred |
+| AWS exporter pivot | Deferred to `feat/aws-export-pivot` off main |

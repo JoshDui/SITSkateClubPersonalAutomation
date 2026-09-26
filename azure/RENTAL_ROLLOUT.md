@@ -31,6 +31,22 @@ rentals are returned between non-overlapping sessions. No automatic downsizing.
 
 ## Admin operations (private chat)
 
+All admin commands require a numeric Telegram user ID in the Key Vault
+`admin-ids` allowlist and the sender's own private chat. Usernames, display
+names, forwarded messages, and Telegram group-admin status do not grant access.
+On 2026-09-26 the approved accounts are @darylt_pc, @yunnnnnns, @Jjiilin,
+@Its_Joycelyn, and @NotDrivingUnderInfluence; their IDs were verified against
+Telegram's live group-administrator records. A username change does not change
+the account's access. Changing `admin-ids` requires restarting the Function App
+because Key Vault values are cached per worker.
+
+Admin command menus are scoped to those accounts' private chats. Public/default
+menus contain only `/start`. Menus aid discovery, not authorization: manually
+typed admin commands still go through the server-side allowlist. Ordinary
+members retain `/start`, attendance buttons, and rental deep links. Admins must
+start the bot privately before Telegram can show their private command menu.
+Existing messages/screenshots cannot be made secret retroactively.
+
 - `/sessions [PAGE_NUMBER]` lists session dates, statuses, and exact IDs (eight
   per page). Past and upcoming sessions can be selected; deleted sessions are hidden.
 - `/deletesession SESSION_ID` previews one specific session, attendance/rental
