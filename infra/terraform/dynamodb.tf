@@ -6,6 +6,10 @@
 #   sessions  — point lookup by id (ULID); GSI for "upcoming within N days" range
 #   responses — query by session_id, optionally filtered to category prefix via
 #               composite SK "{category}#{telegram_id}" (BeginsWith-efficient)
+#   state     — point lookups by (pk, sk): pk=BOOKING/sk=session_id holds a
+#               session's booking document (conditional writes on `rev`),
+#               pk=TELEGRAM/sk=user_id a linked profile, pk=CLAIM/sk=username
+#               a registry handle claim. See shared/booking_store.py.
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_dynamodb_table" "members" {
@@ -62,6 +66,23 @@ resource "aws_dynamodb_table" "responses" {
 
   attribute {
     name = "session_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+}
+
+resource "aws_dynamodb_table" "state" {
+  name         = "${local.prefix}-state"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
     type = "S"
   }
 

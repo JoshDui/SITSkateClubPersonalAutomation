@@ -27,16 +27,6 @@ resource "aws_ssm_parameter" "webhook_secret" {
   }
 }
 
-resource "aws_ssm_parameter" "power_automate_url" {
-  name  = "/${local.project}/${local.env}/power_automate_url"
-  type  = "SecureString"
-  value = "PLACEHOLDER-set-via-aws-ssm-put-parameter"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
-
 resource "aws_ssm_parameter" "admin_ids" {
   name        = "/${local.project}/${local.env}/admin_ids"
   type        = "String"
@@ -48,15 +38,19 @@ resource "aws_ssm_parameter" "admin_ids" {
   }
 }
 
+# Not secret: Terraform owns these values (see variables.tf).
 resource "aws_ssm_parameter" "group_chat_id" {
   name        = "/${local.project}/${local.env}/group_chat_id"
   type        = "String"
-  value       = "PLACEHOLDER-telegram-group-chat-id"
-  description = "Telegram numeric chat ID of the club group."
+  value       = var.sit_group_chat_id
+  description = "Telegram numeric chat ID of the SIT club group (weekly poll destination)."
+}
 
-  lifecycle {
-    ignore_changes = [value]
-  }
+resource "aws_ssm_parameter" "group_topic_id" {
+  name        = "/${local.project}/${local.env}/group_topic_id"
+  type        = "String"
+  value       = var.sit_group_topic_id
+  description = "Forum topic (message_thread_id) inside the SIT group where polls are posted."
 }
 
 resource "aws_ssm_parameter" "rental_skates_handle" {

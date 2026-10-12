@@ -12,6 +12,33 @@
 
 locals {
   dist_dir = "${path.module}/../../dist"
+
+  # Settings every function reads in shared/config.py.
+  common_lambda_env = {
+    ENV              = local.env
+    TABLE_MEMBERS    = aws_dynamodb_table.members.name
+    TABLE_SESSIONS   = aws_dynamodb_table.sessions.name
+    TABLE_RESPONSES  = aws_dynamodb_table.responses.name
+    TABLE_STATE      = aws_dynamodb_table.state.name
+    SSM_PREFIX       = "/${local.project}/${local.env}"
+    TIMEZONE         = var.scheduler_timezone
+    BOOKINGS_ENABLED = "true"
+    BOT_USERNAME     = var.bot_username
+    RULES_FORM_URL   = var.rules_form_url
+    # Explicit manual-only Thursday destination; never replaces SIT routing.
+    EIGHT_WHEEL_CHAT_ID      = var.eight_wheel_chat_id
+    DEFAULT_SESSION_START    = var.default_session_start
+    DEFAULT_SESSION_END      = var.default_session_end
+    DEFAULT_SESSION_LOCATION = var.default_session_location
+  }
+
+  # Functions that create export schedules (webhook /sendpoll, /setsession; scheduler).
+  export_schedule_env = {
+    EXPORTER_LAMBDA_ARN   = aws_lambda_function.exporter.arn
+    SCHEDULER_TARGET_ROLE = aws_iam_role.scheduler_target.arn
+    SCHEDULER_GROUP       = "default"
+    SCHEDULE_NAME_PREFIX  = "${local.prefix}-export-"
+  }
 }
 
 # ── Webhook ──────────────────────────────────────────────────────────────────
@@ -27,23 +54,19 @@ resource "aws_lambda_function" "webhook" {
   memory_size      = var.lambda_memory_mb
 
   environment {
-    variables = {
-      ENV                   = local.env
-      TABLE_MEMBERS         = aws_dynamodb_table.members.name
-      TABLE_SESSIONS        = aws_dynamodb_table.sessions.name
-      TABLE_RESPONSES       = aws_dynamodb_table.responses.name
-      SSM_PREFIX            = "/${local.project}/${local.env}"
-      EXPORTER_LAMBDA_ARN   = aws_lambda_function.exporter.arn
-      SCHEDULER_TARGET_ROLE = aws_iam_role.scheduler_target.arn
-      SCHEDULER_GROUP       = "default"
-      SCHEDULE_NAME_PREFIX  = "${local.prefix}-export-"
-      TIMEZONE              = var.scheduler_timezone
-    }
+    variables = merge(local.common_lambda_env, local.export_schedule_env)
   }
 
   depends_on = [aws_cloudwatch_log_group.webhook]
 }
 
+# Public access needs TWO resource-policy statements (required since Oct 2025):
+#   lambda:InvokeFunctionUrl  (Principal *, lambda:FunctionUrlAuthType = NONE)
+#   lambda:InvokeFunction     (Principal *, lambda:InvokedViaFunctionUrl = true)
+# AWS provider 5.x cannot express the second condition, so both statements are
+# managed outside Terraform; see "Function URL access" in SETUP.md. Without
+# them the URL answers 403 before the handler runs and Telegram gets nothing.
+# https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
 resource "aws_lambda_function_url" "webhook" {
   function_name      = aws_lambda_function.webhook.function_name
   authorization_type = "NONE" # Telegram can't sign AWS SigV4; auth is via X-Telegram-Bot-Api-Secret-Token header in handler
@@ -68,18 +91,7 @@ resource "aws_lambda_function" "scheduler" {
   memory_size      = var.lambda_memory_mb
 
   environment {
-    variables = {
-      ENV                   = local.env
-      TABLE_MEMBERS         = aws_dynamodb_table.members.name
-      TABLE_SESSIONS        = aws_dynamodb_table.sessions.name
-      TABLE_RESPONSES       = aws_dynamodb_table.responses.name
-      SSM_PREFIX            = "/${local.project}/${local.env}"
-      EXPORTER_LAMBDA_ARN   = aws_lambda_function.exporter.arn
-      SCHEDULER_TARGET_ROLE = aws_iam_role.scheduler_target.arn
-      SCHEDULER_GROUP       = "default"
-      SCHEDULE_NAME_PREFIX  = "${local.prefix}-export-"
-      TIMEZONE              = var.scheduler_timezone
-    }
+    variables = merge(local.common_lambda_env, local.export_schedule_env)
   }
 
   depends_on = [aws_cloudwatch_log_group.scheduler]
@@ -90,6 +102,9 @@ resource "aws_cloudwatch_event_rule" "weekly_poll" {
   name                = "${local.prefix}-weekly-poll"
   description         = "Fires every Sunday 18:00 SGT (10:00 UTC) to trigger the scheduler Lambda."
   schedule_expression = var.weekly_poll_cron_utc
+  # Explicit, so a rule disabled outside Terraform shows up as drift and is
+  # re-enabled on apply (an unset state is not compared).
+  state = "ENABLED"
 }
 
 resource "aws_cloudwatch_event_target" "weekly_poll_target" {
@@ -115,17 +130,12 @@ resource "aws_lambda_function" "exporter" {
   handler          = "handler.lambda_handler"
   filename         = "${local.dist_dir}/exporter.zip"
   source_code_hash = filebase64sha256("${local.dist_dir}/exporter.zip")
-  timeout          = var.lambda_timeout_seconds
-  memory_size      = var.lambda_memory_mb
+  # One Telegram upload per admin (5 × up to 10s read timeout) must fit.
+  timeout     = 60
+  memory_size = var.lambda_memory_mb
 
   environment {
-    variables = {
-      ENV             = local.env
-      TABLE_MEMBERS   = aws_dynamodb_table.members.name
-      TABLE_SESSIONS  = aws_dynamodb_table.sessions.name
-      TABLE_RESPONSES = aws_dynamodb_table.responses.name
-      SSM_PREFIX      = "/${local.project}/${local.env}"
-    }
+    variables = local.common_lambda_env
   }
 
   depends_on = [aws_cloudwatch_log_group.exporter]

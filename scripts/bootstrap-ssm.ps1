@@ -1,20 +1,20 @@
 # Bootstrap SSM parameters for the skate bot.
 #
 # Prompts securely for the bot token (SecureString — no echo, no history),
-# generates a fresh webhook secret, and populates all 5 /skatebot/prod/*
-# SSM parameters in one shot.
+# generates a fresh webhook secret, and sets the secret /skatebot/prod/*
+# SSM parameters. Run it after the first `terraform apply` (which creates the
+# parameter slots) in your own terminal: it needs interactive input.
+#
+# Group chat/topic IDs are not set here: Terraform owns them (variables.tf).
+# Admin IDs start as the given list; scripts/find_admin_ids.py can then
+# resolve the full allowlist from the SIT group's admins.
 #
 # Usage:
-#   $env:AWS_PROFILE = "skatebot"
 #   .\scripts\bootstrap-ssm.ps1
-#
-# Override defaults:
-#   .\scripts\bootstrap-ssm.ps1 -AdminIds "111,222" -GroupChatId "-1001234567890"
+#   .\scripts\bootstrap-ssm.ps1 -AdminIds "111,222"
 
 param(
     [string]$AdminIds = "844816317",
-    [string]$GroupChatId = "-1001593198353",
-    [string]$PowerAutomateUrl = "https://example.com/placeholder-power-automate-url",
     [string]$SsmPrefix = "/skatebot/prod"
 )
 
@@ -25,13 +25,12 @@ Write-Host "== SSM Bootstrap for skate bot ==" -ForegroundColor Cyan
 Write-Host "  AWS_PROFILE : $($env:AWS_PROFILE)"
 Write-Host "  SSM prefix  : $SsmPrefix"
 Write-Host "  Admin IDs   : $AdminIds"
-Write-Host "  Group chat  : $GroupChatId"
 Write-Host ""
 
 # Sanity check — is AWS CLI reachable?
 $identity = aws sts get-caller-identity --output text --query Arn 2>$null
 if (-not $identity) {
-    Write-Error "AWS CLI not authenticated. Run: `$env:AWS_PROFILE = 'skatebot' then retry."
+    Write-Error "AWS CLI not authenticated. Run 'aws configure' (or set AWS_PROFILE) and retry."
     exit 1
 }
 Write-Host "  AWS identity: $identity" -ForegroundColor DarkGray
@@ -86,12 +85,10 @@ function Put-Ssm {
 
 Write-Host ""
 Write-Host "Pushing to SSM:" -ForegroundColor Cyan
-Put-Ssm -Name "bot_token"          -Value $botToken         -Type "SecureString"
-Put-Ssm -Name "webhook_secret"     -Value $webhookSecret    -Type "SecureString"
-Put-Ssm -Name "admin_ids"          -Value $AdminIds         -Type "String"
-Put-Ssm -Name "group_chat_id"      -Value $GroupChatId      -Type "String"
-Put-Ssm -Name "power_automate_url" -Value $PowerAutomateUrl -Type "SecureString"
+Put-Ssm -Name "bot_token"      -Value $botToken      -Type "SecureString"
+Put-Ssm -Name "webhook_secret" -Value $webhookSecret -Type "SecureString"
+Put-Ssm -Name "admin_ids"      -Value $AdminIds      -Type "String"
 
 Write-Host ""
 Write-Host "All parameters set." -ForegroundColor Green
-Write-Host "Next step: python scripts\setwebhook.py" -ForegroundColor Yellow
+Write-Host "Next steps: python scripts\find_admin_ids.py, then python scripts\setwebhook.py" -ForegroundColor Yellow

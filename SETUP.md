@@ -96,82 +96,76 @@ $env:AWS_PROFILE = "skatebot"  # PowerShell
 
 ---
 
-## 5. Create GitHub repo + configure secrets
+## 5. GitHub repo (CI only)
 
-1. Create a new GitHub repo (public is fine — no secrets in the code):
-   ```bash
-   gh repo create skatetelegrambot-aws --public --source=. --remote=origin --push
-   ```
-   Or via https://github.com/new.
-
-2. In GitHub → repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
-   - `AWS_ACCESS_KEY_ID` — value from step 4
-   - `AWS_SECRET_ACCESS_KEY` — value from step 4
-   - `TG_BOT_TOKEN` — from BotFather (same token as Phase 3)
-   - `TG_WEBHOOK_SECRET` — generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
-   - `POWER_AUTOMATE_URL` — Phase 4 flow URL (or placeholder `https://example.com/pa-placeholder` for v1)
-
-3. In GitHub → repo → **Settings** → **Environments** → **New environment** → `prod`
-   - Add required reviewer (yourself) so `terraform apply` on main requires a manual click.
+CI (`.github/workflows/ci.yml`) runs lint, tests, packaging and
+`terraform validate` on every push and PR. It needs **no secrets** and never
+deploys: Terraform state lives only on the deploying machine
+(`infra/terraform/terraform.tfstate`, gitignored), and a fresh CI runner would
+try to recreate every resource. Deploys run locally (below).
 
 ---
 
-## 6. Populate SSM parameters (one-time, after first terraform apply)
+## 6. Deploy and populate SSM parameters
 
-The Terraform creates empty SSM parameter *slots* but doesn't store secret values (never put secrets in IaC). Fill them manually after the first `terraform apply`:
-
-```bash
-# Bot token
-aws ssm put-parameter --profile skatebot \
-  --name /skatebot/prod/bot_token \
-  --type SecureString \
-  --value "<BotFather token>" \
-  --overwrite
-
-# Webhook secret (must match the one in GitHub Actions secret)
-aws ssm put-parameter --profile skatebot \
-  --name /skatebot/prod/webhook_secret \
-  --type SecureString \
-  --value "$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" \
-  --overwrite
-
-# Power Automate URL (leave as placeholder if Phase 4 flow not ready yet)
-aws ssm put-parameter --profile skatebot \
-  --name /skatebot/prod/power_automate_url \
-  --type String \
-  --value "https://prod-xx.westus.logic.azure.com/workflows/..." \
-  --overwrite
-
-# Admin Telegram user IDs (comma-separated)
-aws ssm put-parameter --profile skatebot \
-  --name /skatebot/prod/admin_ids \
-  --type String \
-  --value "123456789,987654321" \
-  --overwrite
-
-# Group chat ID
-aws ssm put-parameter --profile skatebot \
-  --name /skatebot/prod/group_chat_id \
-  --type String \
-  --value "-100123456789" \
-  --overwrite
+```powershell
+$env:AWS_PROFILE = "skatebot"
+python scripts\package_lambdas.py          # builds dist/*.zip for Lambda
+cd infra\terraform
+terraform plan                              # review: nothing should be replaced
+terraform apply
+cd ..\..
 ```
 
----
+Terraform creates the secret parameter *slots* with placeholders (never put
+secrets in IaC); `group_chat_id` and `group_topic_id` are not secret and are
+set from `variables.tf`. Fill the secrets once, in your own terminal (the
+token prompt is hidden and stays out of shell history):
 
-## 7. Register webhook with Telegram
-
-After the first successful `terraform apply`, Terraform output will include the webhook Lambda's Function URL. Register it with Telegram:
-
-```bash
-python scripts/setwebhook.py
+```powershell
+.\scripts\bootstrap-ssm.ps1                 # bot_token, webhook_secret, admin_ids
+python scripts\find_admin_ids.py --write   # resolve the 5 admins' numeric IDs
 ```
 
-This script reads the URL from Terraform outputs and calls Telegram's `setWebhook` API with the matching secret from SSM.
+Admin authorization uses numeric Telegram IDs, never handles.
 
 ---
 
-## 8. (Optional) Migrate existing Phase 3 data
+## 7. Function URL access (one-time, outside Terraform)
+
+Since October 2025 a public (`AuthType NONE`) Lambda Function URL needs two
+resource-policy statements. AWS provider 5.x cannot express the second
+condition, so both are added with the CLI (re-run only if the webhook function
+is ever recreated):
+
+```powershell
+aws lambda add-permission --function-name skatebot-prod-webhook `
+  --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl `
+  --principal "*" --function-url-auth-type NONE
+aws lambda add-permission --function-name skatebot-prod-webhook `
+  --statement-id FunctionURLInvokeAllowPublicAccess --action lambda:InvokeFunction `
+  --principal "*" --invoked-via-function-url
+```
+
+Check: a POST without the secret header must return **401** (the handler
+rejecting it). A **403** means the policy is still incomplete and Telegram
+cannot reach the bot. https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
+
+---
+
+## 8. Register webhook with Telegram
+
+```powershell
+python scripts\setwebhook.py
+```
+
+Reads the URL from Terraform outputs and calls Telegram's `setWebhook` with
+the matching secret from SSM. `getWebhookInfo` (printed at the end) should
+show the Lambda URL with no `last_error_message`.
+
+---
+
+## 9. (Optional) Migrate existing Phase 3 data
 
 If you want to preserve the members already imported in Phase 3's `skatebot.db`:
 

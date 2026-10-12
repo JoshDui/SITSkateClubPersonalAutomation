@@ -2,6 +2,17 @@
 
 Session handoff document. Snapshot of where deployment stands so future-Joshua can resume without re-reading the whole chat history.
 
+> **2026-10-12: AWS is the active target again.** The Azure for Students
+> subscription was disabled on 2026-10-06 (its $100 credit ran out, spent by an
+> unrelated VM), which took the Azure bot offline and missed the Sunday
+> 2026-10-11 poll. The Azure feature set (rentals, rules registry, session
+> deletion, admin allowlist, 8 Wheel Clan, trusted declarations) was ported to
+> the AWS layout on branch `aws-port`: DynamoDB `state` table for booking
+> documents, EventBridge Scheduler exports, attendance CSVs DM'd to admins
+> (no S3, no Power Automate). CI is now tests-only. Deploy steps: SETUP.md §6–8.
+> Everything below this note predates the port; its Power Automate and
+> placeholder-SSM details are obsolete.
+
 **Last updated:** 2026-05-01
 **Branch:** `main` (tracking `origin/main`) — multi-cloud post-merge.
 **Last commit on main:** `1fa5ad6` — "Merge pull request #1 from JoshDui/feat/azure-port"

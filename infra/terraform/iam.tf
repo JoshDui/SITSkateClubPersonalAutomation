@@ -35,6 +35,7 @@ data "aws_iam_policy_document" "ddb_rw_all_tables" {
       aws_dynamodb_table.sessions.arn,
       "${aws_dynamodb_table.sessions.arn}/index/*",
       aws_dynamodb_table.responses.arn,
+      aws_dynamodb_table.state.arn,
     ]
   }
 }
@@ -108,8 +109,8 @@ resource "aws_iam_role_policy" "scheduler_ssm" {
   policy = data.aws_iam_policy_document.ssm_read_params.json
 }
 
-# Scheduler Lambda needs to create/delete EventBridge Scheduler schedules
-# (one-off DateTriggers for each session's export).
+# Webhook (/sendpoll, /setsession) and scheduler Lambdas create/update
+# EventBridge Scheduler schedules (one-off at() triggers for each session's export).
 data "aws_iam_policy_document" "eventbridge_scheduler_rw" {
   statement {
     effect = "Allow"
@@ -142,6 +143,12 @@ data "aws_iam_policy_document" "eventbridge_scheduler_rw" {
 resource "aws_iam_role_policy" "scheduler_eventbridge" {
   name   = "eventbridge-scheduler-rw"
   role   = aws_iam_role.scheduler.id
+  policy = data.aws_iam_policy_document.eventbridge_scheduler_rw.json
+}
+
+resource "aws_iam_role_policy" "webhook_eventbridge" {
+  name   = "eventbridge-scheduler-rw"
+  role   = aws_iam_role.webhook.id
   policy = data.aws_iam_policy_document.eventbridge_scheduler_rw.json
 }
 

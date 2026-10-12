@@ -6,7 +6,6 @@ required. Tables are created fresh for each test via the `ddb_tables` fixture.
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -29,6 +28,7 @@ def aws_env(monkeypatch):
     monkeypatch.setenv("TABLE_MEMBERS", "skatebot-test-members")
     monkeypatch.setenv("TABLE_SESSIONS", "skatebot-test-sessions")
     monkeypatch.setenv("TABLE_RESPONSES", "skatebot-test-responses")
+    monkeypatch.setenv("TABLE_STATE", "skatebot-test-state")
     monkeypatch.setenv("SSM_PREFIX", "/skatebot/test")
     monkeypatch.setenv("TIMEZONE", "Asia/Singapore")
     monkeypatch.setenv("DEFAULT_SESSION_START", "18:30")
@@ -79,14 +79,26 @@ def ddb_tables(aws_env):
             ],
             BillingMode="PAY_PER_REQUEST",
         )
+        ddb.create_table(
+            TableName="skatebot-test-state",
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
 
         # Populate SSM placeholders that config.py's secret getters need.
         ssm = boto3.client("ssm")
         ssm.put_parameter(Name="/skatebot/test/bot_token", Value="TEST-TOKEN", Type="SecureString")
         ssm.put_parameter(Name="/skatebot/test/webhook_secret", Value="TEST-SECRET", Type="SecureString")
-        ssm.put_parameter(Name="/skatebot/test/power_automate_url", Value="https://example.com/pa", Type="SecureString")
         ssm.put_parameter(Name="/skatebot/test/admin_ids", Value="111,222", Type="String")
         ssm.put_parameter(Name="/skatebot/test/group_chat_id", Value="-100999", Type="String")
+        ssm.put_parameter(Name="/skatebot/test/group_topic_id", Value="3041", Type="String")
         ssm.put_parameter(Name="/skatebot/test/rental_skates_handle", Value="NotDrivingUnderInfluence", Type="String")
 
         yield ddb
@@ -97,7 +109,18 @@ def db_module(ddb_tables, monkeypatch):
     """Fresh import of shared.db under the mocked AWS. Reload to reset the
     module-level table resource handles to the mocked ones."""
     import importlib
-    from shared import config, db as _db
+
+    from shared import config
+    from shared import db as _db
     importlib.reload(config)
     importlib.reload(_db)
     return _db
+
+
+@pytest.fixture
+def store_module(db_module):
+    """shared.booking_store bound to the mocked tables."""
+    import importlib
+
+    from shared import booking_store
+    return importlib.reload(booking_store)

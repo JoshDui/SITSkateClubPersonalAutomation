@@ -56,3 +56,51 @@ variable "scheduler_timezone" {
   type        = string
   default     = "Asia/Singapore"
 }
+
+variable "bot_username" {
+  description = "Telegram bot username (no @). Used for t.me deep links into the rental DM."
+  type        = string
+  default     = "SITSkateClubBot"
+}
+
+variable "rules_form_url" {
+  description = "Rules acknowledgement form link shown in the rental DM."
+  type        = string
+  default     = "https://forms.cloud.microsoft/r/Q9fETRjdMq"
+}
+
+variable "eight_wheel_chat_id" {
+  description = "8 Wheel Clan supergroup chat ID for manual Thursday polls (/sendpoll 8 Wheel Clan). shared/destinations.py also pins this exact value."
+  type        = string
+  default     = "-1002958151210"
+}
+
+variable "default_session_start" {
+  description = "Default session start time (HH:MM, local) for auto-created sessions."
+  type        = string
+  default     = "18:30"
+}
+
+variable "default_session_end" {
+  description = "Default session end time (HH:MM, local) for auto-created sessions."
+  type        = string
+  default     = "21:30"
+}
+
+variable "default_session_location" {
+  description = "Default location for auto-created sessions."
+  type        = string
+  default     = "SIT @ Punggol Coast"
+}
+
+variable "sit_group_chat_id" {
+  description = "SIT Inline Skate supergroup chat ID (from a message link t.me/c/1593198353/...)."
+  type        = string
+  default     = "-1001593198353"
+}
+
+variable "sit_group_topic_id" {
+  description = "Topic (message_thread_id) for SIT polls (from t.me/c/<group>/3041/<msg>)."
+  type        = string
+  default     = "3041"
+}

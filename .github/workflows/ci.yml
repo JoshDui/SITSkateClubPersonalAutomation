@@ -1,0 +1,89 @@
+name: ci
+
+# Tests and static checks only. Deploys run from a maintainer's machine
+# (`make package` then `terraform apply` in infra/terraform), because the
+# Terraform state is local and must not be recreated by a fresh CI runner.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  TERRAFORM_VERSION: "1.9.8"
+
+jobs:
+  lint_and_test:
+    name: Lint + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check shared services scripts tests
+
+      - name: Pytest
+        run: pytest -v
+
+  package:
+    name: Build Lambda zips
+    runs-on: ubuntu-latest
+    needs: lint_and_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Build all service zips
+        run: python scripts/package_lambdas.py
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-zips
+          path: dist/*.zip
+          retention-days: 7
+
+  terraform_validate:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    needs: package
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Lambda zips
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-zips
+          path: dist
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - run: terraform init -input=false -backend=false
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        run: terraform validate

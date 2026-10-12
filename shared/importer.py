@@ -22,7 +22,7 @@ Sheet1 column layout (0-indexed, confirmed from actual file):
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import openpyxl
 
@@ -38,11 +38,16 @@ def _cell(row, idx):
 
 
 def import_from_file(path: str) -> dict:
+    from shared.registry_import import import_from_file as import_registry
+    return import_registry(path)
+
+
+def _legacy_import_from_file(path: str) -> dict:
     """Read the xlsx and upsert members. Returns summary counts."""
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.worksheets[0]
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     counts = {"new": 0, "updated": 0, "unchanged": 0, "skipped": 0}
     rows_seen = 0
 

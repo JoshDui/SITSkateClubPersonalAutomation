@@ -1,31 +1,26 @@
 """
-Scheduler Lambda.
+Scheduler Lambda — weekly EventBridge rule.
 
-Invoked once a week by an EventBridge Rule (Sunday 18:00 SGT = Sunday 10:00
-UTC). Idempotently creates a session for the upcoming Tuesday, sends the
-poll, and registers an EventBridge Scheduler one-off to fire the exporter
-24h after the session's start time.
+Fires once a week (Sunday 18:00 SGT = Sunday 10:00 UTC, see
+var.weekly_poll_cron_utc). Idempotently creates the SIT session for the
+upcoming Tuesday, sends the poll, and schedules the exporter for 24h after the
+session starts.
 
-If a session already exists for the upcoming week (admin ran /sendpoll
-early, or /skipsession'd to cancel the week), this handler is a no-op.
+If a SIT session already exists for the upcoming week (admin ran /sendpoll
+early, or /skipsession'd to cancel the week), this handler is a no-op, unless
+that session never got its poll (a failed earlier attempt), which is resumed.
+8 Wheel Clan sessions are manual-only and never suppress the SIT poll.
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import boto3
-
-from shared import config, db, poll, telegram
+from shared import config, db, export_schedule, poll, telegram
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
-
-_scheduler = boto3.client("scheduler")
-_lambda = boto3.client("lambda")
 
 _TUESDAY_WEEKDAY = 1  # Python: Mon=0 ... Sun=6
 
@@ -34,11 +29,19 @@ def lambda_handler(event: dict, context) -> dict:
     try:
         existing = db.get_upcoming_session(within_days=7)
         if existing is not None:
-            log.info(
-                "Session %s already exists for %s — weekly cron is a no-op.",
-                existing["id"], existing["session_date"],
-            )
-            return {"status": "skipped", "reason": "session_exists", "session_id": existing["id"]}
+            if existing.get("skipped") or existing.get("poll_message_id"):
+                log.info(
+                    "Session %s already exists for %s — weekly cron is a no-op.",
+                    existing["id"], existing["session_date"],
+                )
+                return {"status": "noop", "session_id": existing["id"]}
+            # EventBridge invokes asynchronously and Lambda retries a failed
+            # run. If an earlier attempt created the session but could not
+            # post the poll, finish that session instead of skipping the week.
+            log.warning("Session %s has no poll yet — resuming.", existing["id"])
+            _send_poll(existing["id"])
+            export_schedule.schedule_export(existing["id"])
+            return {"status": "resumed", "session_id": existing["id"]}
 
         tz = ZoneInfo(config.TIMEZONE)
         now = datetime.now(tz)
@@ -50,13 +53,15 @@ def lambda_handler(event: dict, context) -> dict:
             start_time=config.DEFAULT_SESSION_START,
             end_time=config.DEFAULT_SESSION_END,
             location=config.DEFAULT_SESSION_LOCATION,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            group_key='sit', group_name='SIT Inline Skate',
+            poll_chat_id=config.attendance_poll_chat_id(),
+            poll_topic_id=config.attendance_poll_topic_id(),
         )
         log.info("Created session %s for %s", session_id, session_date)
 
         _send_poll(session_id)
-        _schedule_export(session_id)
-
+        export_schedule.schedule_export(session_id)
         return {"status": "created", "session_id": session_id, "session_date": session_date}
     except Exception:
         log.exception("Scheduler cron failed.")
@@ -68,46 +73,9 @@ def _send_poll(session_id: str) -> None:
     if session is None:
         return
     result = telegram.send_message(
-        chat_id=config.group_chat_id(),
+        chat_id=session.get('poll_chat_id') or config.attendance_poll_chat_id(),
         text=poll.build_poll_text(session, []),
         reply_markup=poll.build_keyboard(session_id),
+        message_thread_id=(session['poll_topic_id'] or None) if 'poll_topic_id' in session else config.attendance_poll_topic_id(),
     )
-    db.set_poll_message_id(session_id, result["message_id"])
-
-
-def _schedule_export(session_id: str) -> None:
-    session = db.get_session(session_id)
-    if session is None:
-        return
-    tz = ZoneInfo(config.TIMEZONE)
-    start = datetime.strptime(
-        f"{session['session_date']} {session['start_time']}", "%Y-%m-%d %H:%M",
-    ).replace(tzinfo=tz)
-    fire_at = start + timedelta(hours=24)
-    now = datetime.now(tz)
-    if fire_at <= now:
-        fire_at = now + timedelta(seconds=60)
-
-    at_expr = f"at({fire_at.strftime('%Y-%m-%dT%H:%M:%S')})"
-    name = f"{os.environ['SCHEDULE_NAME_PREFIX']}{session_id}"
-
-    params = {
-        "Name": name,
-        "GroupName": os.environ["SCHEDULER_GROUP"],
-        "ScheduleExpression": at_expr,
-        "ScheduleExpressionTimezone": config.TIMEZONE,
-        "FlexibleTimeWindow": {"Mode": "OFF"},
-        "Target": {
-            "Arn": os.environ["EXPORTER_LAMBDA_ARN"],
-            "RoleArn": os.environ["SCHEDULER_TARGET_ROLE"],
-            "Input": json.dumps({"session_id": session_id}),
-        },
-        "ActionAfterCompletion": "DELETE",
-    }
-
-    try:
-        _scheduler.create_schedule(**params)
-        log.info("Created export schedule %s for %s", name, fire_at.isoformat())
-    except _scheduler.exceptions.ConflictException:
-        _scheduler.update_schedule(**params)
-        log.info("Updated export schedule %s for %s", name, fire_at.isoformat())
+    db.set_poll_message_id(session_id, result["message_id"], session.get('poll_chat_id') or config.attendance_poll_chat_id())

@@ -17,21 +17,20 @@ output "exporter_lambda_name" {
 }
 
 output "dynamodb_tables" {
-  description = "Names of the three DynamoDB tables."
+  description = "Names of the DynamoDB tables."
   value = {
     members   = aws_dynamodb_table.members.name
     sessions  = aws_dynamodb_table.sessions.name
     responses = aws_dynamodb_table.responses.name
+    state     = aws_dynamodb_table.state.name
   }
 }
 
 output "ssm_parameter_names" {
-  description = "SSM parameter names to populate via `aws ssm put-parameter`. See SETUP.md §6."
+  description = "SSM parameters to populate via `aws ssm put-parameter --overwrite` after the first apply."
   value = [
     aws_ssm_parameter.bot_token.name,
     aws_ssm_parameter.webhook_secret.name,
-    aws_ssm_parameter.power_automate_url.name,
     aws_ssm_parameter.admin_ids.name,
-    aws_ssm_parameter.group_chat_id.name,
   ]
 }

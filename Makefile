@@ -32,24 +32,8 @@ dynamodb-local:
 dynamodb-down:
 	docker stop skatebot-ddb || true
 
-package: clean
-	mkdir -p dist
-	# Webhook
-	cd services/webhook && pip install -r requirements.txt -t build/ --quiet
-	cp -r shared services/webhook/build/
-	cp services/webhook/handler.py services/webhook/build/
-	cd services/webhook/build && zip -qr ../../../dist/webhook.zip .
-	# Scheduler
-	cd services/scheduler && pip install -r requirements.txt -t build/ --quiet
-	cp -r shared services/scheduler/build/
-	cp services/scheduler/handler.py services/scheduler/build/
-	cd services/scheduler/build && zip -qr ../../../dist/scheduler.zip .
-	# Exporter
-	cd services/exporter && pip install -r requirements.txt -t build/ --quiet
-	cp -r shared services/exporter/build/
-	cp services/exporter/handler.py services/exporter/build/
-	cd services/exporter/build && zip -qr ../../../dist/exporter.zip .
-	@echo "Built: dist/webhook.zip dist/scheduler.zip dist/exporter.zip"
+package:
+	python scripts/package_lambdas.py
 
 clean:
 	rm -rf dist services/*/build

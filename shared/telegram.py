@@ -24,15 +24,60 @@ def _call(method: str, **params) -> dict:
     params = {k: v for k, v in params.items() if v is not None}
     with httpx.Client(timeout=_DEFAULT_TIMEOUT) as client:
         r = client.post(_API.format(token=config.bot_token(), method=method), json=params)
-    r.raise_for_status()
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError:
+        r.raise_for_status()
+        raise
     if not data.get("ok"):
         raise RuntimeError(f"Telegram {method} failed: {data}")
+    r.raise_for_status()
     return data["result"]
 
 
-def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> dict:
-    return _call("sendMessage", chat_id=chat_id, text=text, reply_markup=reply_markup)
+def send_message(
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+    message_thread_id: int | None = None,
+) -> dict:
+    """`message_thread_id` targets a topic in a forum-enabled supergroup.
+    Omit (or pass None) to post in the default 'General' topic."""
+    return _call(
+        "sendMessage",
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        message_thread_id=message_thread_id,
+    )
+
+
+def send_document(
+    chat_id: int,
+    filename: str,
+    content: bytes,
+    caption: str | None = None,
+    mime_type: str = "text/csv",
+) -> dict:
+    """Upload a file as a document. Telegram requires multipart/form-data for
+    new uploads. API: https://core.telegram.org/bots/api#senddocument"""
+    data = {"chat_id": str(chat_id)}
+    if caption:
+        data["caption"] = caption
+    with httpx.Client(timeout=_DEFAULT_TIMEOUT) as client:
+        r = client.post(
+            _API.format(token=config.bot_token(), method="sendDocument"),
+            data=data,
+            files={"document": (filename, content, mime_type)},
+        )
+    try:
+        body = r.json()
+    except ValueError:
+        r.raise_for_status()
+        raise
+    if not body.get("ok"):
+        raise RuntimeError(f"Telegram sendDocument failed: {body}")
+    return body["result"]
 
 
 def edit_message_text(
@@ -64,6 +109,19 @@ def answer_callback_query(callback_query_id: str, text: str = "") -> dict:
 
 def get_file(file_id: str) -> dict:
     return _call("getFile", file_id=file_id)
+
+
+def delete_message(chat_id: int, message_id: int) -> bool:
+    """Telegram limits message deletion (usually <48h); caller handles fallback.
+
+    API: https://core.telegram.org/bots/api#deletemessage
+    """
+    try:
+        return _call('deleteMessage', chat_id=chat_id, message_id=message_id)
+    except RuntimeError as exc:
+        if 'message to delete not found' in str(exc).lower():
+            return True  # An earlier attempt already removed this exact message.
+        raise
 
 
 def download_file(file_path: str, dest: str) -> None:
