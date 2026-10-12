@@ -1,4 +1,4 @@
-"""Private Telegram rental flow and registry-gated attendance."""
+"""Private Telegram rentals and attendance based on participant declarations."""
 from __future__ import annotations
 
 import logging
@@ -49,16 +49,7 @@ def state_for(sid):
 
 
 def eligible(user, sid, rental=True):
-    if not store.acknowledged_member(user):
-        rows = []
-        if config.RULES_FORM_URL:
-            rows.append([{'text': 'Complete rules form', 'url': config.RULES_FORM_URL}])
-        rows += [[button('Check again', sid, 'menu' if rental else 'check')],
-                 [button('Ask an admin', sid, 'help')]]
-        send(user, 'A completed rules acknowledgement matching your Telegram account is required. '
-             'Complete the form using your current Telegram handle. '
-             'Check again checks the latest imported registry; a new submission may need an admin to refresh it.', rows)
-        return False
+    # Both groups trust declarations. The optional registry is not an access gate.
     if rental and state_for(sid)['people'].get(str(user['id']), {}).get('current_student') is not True:
         send(user, 'Rentals are for currently enrolled SIT students only. Are you currently enrolled?', [
             [button('Yes, currently enrolled', sid, 'student')],
@@ -66,6 +57,15 @@ def eligible(user, sid, rental=True):
         ])
         return False
     return True
+
+
+def rules_information(user, sid):
+    rows = back_to_group(sid)
+    if config.RULES_FORM_URL:
+        rows.append([{'text': 'Rules acknowledgement form', 'url': config.RULES_FORM_URL}])
+    send(user, 'We accept your declarations without checking the registry. '
+         'External participants must complete the rules acknowledgement form before selecting '
+         'the external attendance option. Return to the group poll to register.', rows)
 
 
 def menu(user, sid):
@@ -80,6 +80,8 @@ def menu(user, sid):
              for s in rentals.INVENTORY]
     rows = [sizes[i:i+2] for i in range(0, len(sizes), 2)]
     rows.append([button('Other / unsure — admin help', sid, 'help')])
+    if config.RULES_FORM_URL:
+        rows.append([{'text': 'Rules acknowledgement form', 'url': config.RULES_FORM_URL}])
     if person.get('rental'):
         rows += [[button('Cancel rental only', sid, 'cancelr', version)],
                  [button('Cancel attendance', sid, 'cancela', version)]]
@@ -124,10 +126,11 @@ def change(sid, user, action, update_id, **kwargs):
 
 def start(user, sid, rules_only=False):
     try:
-        session_open(sid)
+        session = session_open(sid)
+        send(user, f"{session.get('group_name', 'SIT Inline Skate')} / {session['session_date']} / "
+                   f"{session['start_time']}–{session['end_time']}\n{session['location']}")
         if rules_only:
-            if eligible(user, sid, rental=False):
-                send(user, 'Rules acknowledgement found. Return to the group and select your attendance option.')
+            rules_information(user, sid)
         else:
             menu(user, sid)
     except rentals.BookingError as exc:
@@ -164,7 +167,7 @@ def callback(cq, update_id):
         if not eligible(user, sid, rental=False):
             return
         if action == 'check':
-            send(user, 'Rules acknowledgement found. Return to the group and select your attendance option.')
+            rules_information(user, sid)
             return
         if action in ('student', 'external'):
             change(sid, user, 'declare_student' if action == 'student' else 'declare_external', update_id)
@@ -238,13 +241,6 @@ def attendance(cq, update_id):
             return
         if category not in ('sit_student', 'non_sit'):
             raise rentals.BookingError('Invalid attendance category.')
-        state = state_for(sid)
-        person = state['people'].get(str(user['id']), {})
-        withdrawing = person.get('attendance') == category and not person.get('rental')
-        if not withdrawing and not store.acknowledged_member(user):
-            telegram._call('answerCallbackQuery', callback_query_id=cq['id'],
-                           url=f'https://t.me/{config.BOT_USERNAME}?start=rules_{sid}')
-            return
         change(sid, user, category, update_id)
         try:
             telegram.answer_callback_query(cq['id'], 'Attendance updated.')

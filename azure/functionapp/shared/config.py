@@ -36,6 +36,7 @@ TIMEZONE = os.environ.get("TIMEZONE", "Asia/Singapore")
 BOOKINGS_ENABLED = os.environ.get("BOOKINGS_ENABLED", "false").lower() == "true"
 RULES_FORM_URL = os.environ.get("RULES_FORM_URL", "")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
+EIGHT_WHEEL_CHAT_ID = os.environ.get('EIGHT_WHEEL_CHAT_ID', '')
 
 # Storage Queue used by webhook+scheduler to hand off export jobs to exporter.
 # Format: https://<storage-account>.queue.core.windows.net/

@@ -76,6 +76,9 @@ def apply_action(state, user, action, update_id, *, version=None,
         if person.get('rental'):
             raise BookingError('Manage your rental in the bot chat before changing attendance.')
         person['attendance'] = None if person.get('attendance') == action else action
+        if person['attendance'] == 'non_sit':
+            # A newer external declaration supersedes an earlier rental declaration.
+            person['current_student'] = False
     elif action == 'review':
         person['review'] = 'Size/eligibility assistance requested'
     else:

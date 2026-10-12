@@ -26,26 +26,43 @@ def list_sessions(msg, args):
     if not authorized_private(msg):
         return
     chat_id = msg['chat']['id']
+    group_key = 'sit'
+    group_name = 'SIT Inline Skate'
+    group_args = list(args)
+    page_args = []
+    if group_args and group_args[-1].isdigit():
+        page_args = [group_args.pop()]
+    if group_args:
+        from shared import destinations
+        try:
+            group_key = destinations.key(' '.join(group_args))
+            group_name = destinations.label(group_key)
+        except ValueError as exc:
+            telegram.send_message(chat_id, str(exc))
+            return
+    args = page_args
     if len(args) > 1 or (args and (not args[0].isdigit() or len(args[0]) > 6 or int(args[0]) < 1)):
         telegram.send_message(chat_id, 'Usage: /sessions [PAGE_NUMBER]')
         return
-    sessions = db.list_sessions_for_admin()
+    sessions = [s for s in db.list_sessions_for_admin() if s.get('group_key', 'sit') == group_key]
     if not sessions:
         telegram.send_message(chat_id, 'No sessions found. Deleted sessions are hidden.')
         return
     page = int(args[0]) if args else 1
     pages = (len(sessions) + PAGE_SIZE - 1) // PAGE_SIZE
+    target = '' if group_key == 'sit' else f'{group_name} '
     if page > pages:
-        telegram.send_message(chat_id, f'No such page. Use /sessions {pages} for the last page.')
+        telegram.send_message(chat_id, f'No such page. Use /sessions {target}{pages} for the last page.')
         return
-    lines = [f'Sessions (page {page}/{pages})', '']
+    lines = [f'Sessions: {group_name} (page {page}/{pages})', '']
     for session in sessions[(page - 1) * PAGE_SIZE:page * PAGE_SIZE]:
         status = 'exported' if session.get('exported') else ('skipped' if session.get('skipped') else 'not exported')
         lines.extend([f"{session['session_date']} {session['start_time']} - {session['end_time']} ({status})",
                       str(session.get('location', ''))[:120], session['id'], ''])
     lines.append('To preview deletion: /deletesession SESSION_ID')
     if page < pages:
-        lines.append(f'Next page: /sessions {page + 1}')
+        target = '' if group_key == 'sit' else f'{group_name} '
+        lines.append(f'Next page: /sessions {target}{page + 1}')
     telegram.send_message(chat_id, '\n'.join(lines))
 
 

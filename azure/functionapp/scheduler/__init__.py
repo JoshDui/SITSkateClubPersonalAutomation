@@ -65,6 +65,9 @@ def main(timer: func.TimerRequest) -> None:
             end_time=config.DEFAULT_SESSION_END,
             location=config.DEFAULT_SESSION_LOCATION,
             created_at=datetime.now(UTC).isoformat(),
+            group_key='sit', group_name='SIT Inline Skate',
+            poll_chat_id=config.attendance_poll_chat_id(),
+            poll_topic_id=config.attendance_poll_topic_id(),
         )
         log.info("Created session %s for %s", session_id, session_date)
 
@@ -80,12 +83,12 @@ def _send_poll(session_id: str) -> None:
     if session is None:
         return
     result = telegram.send_message(
-        chat_id=config.attendance_poll_chat_id(),
+        chat_id=session.get('poll_chat_id') or config.attendance_poll_chat_id(),
         text=poll.build_poll_text(session, []),
         reply_markup=poll.build_keyboard(session_id),
-        message_thread_id=config.attendance_poll_topic_id(),
+        message_thread_id=(session['poll_topic_id'] or None) if 'poll_topic_id' in session else config.attendance_poll_topic_id(),
     )
-    db.set_poll_message_id(session_id, result["message_id"])
+    db.set_poll_message_id(session_id, result["message_id"], session.get('poll_chat_id') or config.attendance_poll_chat_id())
 
 
 def _enqueue_export(session_id: str) -> None:

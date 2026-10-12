@@ -139,7 +139,7 @@ def _build_attendees_for_session(session: dict, db) -> list[dict]:
         tg_id = r["telegram_id"]
         entry = by_user.setdefault(
             tg_id,
-            {"handle": r.get("username"), "categories": []},
+            {"handle": r.get("username"), "first_name": r.get("first_name"), "categories": []},
         )
         cat = r.get("category")
         if cat and cat not in entry["categories"]:
@@ -151,12 +151,12 @@ def _build_attendees_for_session(session: dict, db) -> list[dict]:
         member = (db.get_member(handle) if handle else None) or {}
         enriched.append({
             "handle": handle,
-            "full_name": member.get("full_name"),
+            "full_name": member.get("full_name") or entry.get("first_name"),
             "student_id": member.get("student_id"),
             "full_course_name": member.get("full_course_name"),
             "cluster": member.get("cluster"),
             "year": member.get("year"),
-            "is_sit_student": bool(member.get("is_sit_student", 0)),
+            "is_sit_student": any(cat in ('sit_student', 'rental_skates') for cat in entry['categories']),
             "categories": entry["categories"],
         })
     return enriched

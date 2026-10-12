@@ -62,11 +62,12 @@ def build_poll_text(session: dict, responses: list[dict]) -> str:
     total = len({r["telegram_id"] for r in responses})
 
     lines = [
-        "SIT Inline Skate training session",
+        f"{session.get('group_name', 'SIT Inline Skate')} training session",
         "",
         f"Date: {date_str}",
         f"Time: {start_str} - {end_str}",
         f"Meeting Location: {session['location']}",
+        "Attendance and student status are self-declared; registry verification is not required.",
         "",
     ]
     for cat_key in CATEGORY_KEYS:

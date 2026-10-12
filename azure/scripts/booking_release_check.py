@@ -28,7 +28,7 @@ def main():
         'telegram_last_error_date': info.get('last_error_date'),
     }
     print(json.dumps(result), flush=True)
-    assert eligible > 0
+    # Registry counts are informational: participation now trusts declarations.
     assert anonymous.status_code == 401
     assert authenticated.status_code == 200 and authenticated.text == 'ok'
     assert info.get('url') == endpoint

@@ -141,9 +141,15 @@ def _handle_message(msg: dict) -> None:
 
 
 def _cmd_sendpoll(msg: dict, args: list[str]) -> None:
+    from shared import destinations
+    try:
+        group_key = destinations.key(' '.join(args))
+        chat_id, topic_id = destinations.route(group_key)
+    except ValueError as exc:
+        telegram.send_message(msg['chat']['id'], str(exc))
+        return
     now = datetime.now(ZoneInfo(config.TIMEZONE))
-    days_ahead = (1 - now.weekday()) % 7  # 1 == Tuesday
-    session_date = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    session_date = destinations.next_date(group_key, now)
 
     session_id = db.create_session(
         session_date=session_date,
@@ -151,6 +157,8 @@ def _cmd_sendpoll(msg: dict, args: list[str]) -> None:
         end_time=config.DEFAULT_SESSION_END,
         location=config.DEFAULT_SESSION_LOCATION,
         created_at=datetime.now(UTC).isoformat(),
+        group_key=group_key, group_name=destinations.label(group_key),
+        poll_chat_id=chat_id, poll_topic_id=topic_id,
     )
     _send_poll(session_id)
     _enqueue_export(session_id)
@@ -162,13 +170,22 @@ def _cmd_sendpoll(msg: dict, args: list[str]) -> None:
     in_group = chat_id == config.attendance_poll_chat_id()
     telegram.send_message(
         chat_id,
-        f"✅ Poll sent for session on {session_date}. (Session ID: {session_id})",
+        f"✅ Poll sent to {destinations.label(group_key)} for {session_date}. (Session ID: {session_id})",
         message_thread_id=config.attendance_poll_topic_id() if in_group else None,
     )
 
 
+def _selected_session(msg, args):
+    from shared import destinations
+    try:
+        return db.get_latest_session(destinations.key(' '.join(args)))
+    except ValueError as exc:
+        telegram.send_message(msg['chat']['id'], str(exc))
+        return None
+
+
 def _cmd_skipsession(msg: dict, args: list[str]) -> None:
-    session = db.get_latest_session()
+    session = _selected_session(msg, args)
     if session is None:
         telegram.send_message(msg["chat"]["id"], "No sessions found.")
         return
@@ -182,6 +199,14 @@ def _cmd_skipsession(msg: dict, args: list[str]) -> None:
 
 
 def _cmd_setsession(msg: dict, args: list[str]) -> None:
+    # Optional trailing --group NAME keeps the existing date/time/location syntax.
+    group_args = []
+    if '--group' in args:
+        pos = args.index('--group')
+        group_args, args = args[pos + 1:], args[:pos]
+        if not group_args:
+            telegram.send_message(msg['chat']['id'], 'Missing group after --group. Nothing changed.')
+            return
     if len(args) < 4:
         telegram.send_message(
             msg["chat"]["id"],
@@ -204,7 +229,7 @@ def _cmd_setsession(msg: dict, args: list[str]) -> None:
         )
         return
 
-    session = db.get_latest_session()
+    session = _selected_session(msg, group_args)
     if session is None:
         telegram.send_message(
             msg["chat"]["id"],
@@ -228,7 +253,7 @@ def _cmd_setsession(msg: dict, args: list[str]) -> None:
 
 
 def _cmd_summary(msg: dict, args: list[str]) -> None:
-    session = db.get_latest_session()
+    session = _selected_session(msg, args)
     if session is None:
         telegram.send_message(msg["chat"]["id"], "No sessions found.")
         return
@@ -237,6 +262,7 @@ def _cmd_summary(msg: dict, args: list[str]) -> None:
     lines = [
         f"\U0001f4cb Summary — {session['session_date']} ({session['location']})",
         f"Session ID: {session['id']}",
+        f"Group: {session.get('group_name', 'SIT Inline Skate')}",
         "",
     ]
     total_ids: set[int] = set()
@@ -307,13 +333,13 @@ def _cmd_rentals(msg: dict, args: list[str]) -> None:
         telegram.send_message(msg['chat']['id'], 'Please request the rental list in a private chat.')
         return
     from shared import booking_flow, rentals
-    session = db.get_session(args[0]) if args and _ULID_RE.fullmatch(args[0]) else db.get_latest_session()
+    session = db.get_session(args[0]) if len(args) == 1 and _ULID_RE.fullmatch(args[0]) else _selected_session(msg, args)
     if session is None:
         telegram.send_message(msg['chat']['id'], 'No session found.')
         return
     state = booking_flow.state_for(session['id'])
     stock = rentals.available(state)
-    lines = [f"Rentals: {session['session_date']} ({session['id']})", 'Remaining pairs: ' + ', '.join(f'{k}: {v}' for k, v in stock.items())]
+    lines = [f"Rentals: {session.get('group_name', 'SIT Inline Skate')} / {session['session_date']} ({session['id']})", 'Remaining pairs: ' + ', '.join(f'{k}: {v}' for k, v in stock.items())]
     for uid, person in state['people'].items():
         rental = person.get('rental')
         if rental:
@@ -465,12 +491,12 @@ def _send_poll(session_id: str) -> None:
     if session is None:
         return
     result = telegram.send_message(
-        chat_id=config.attendance_poll_chat_id(),
+        chat_id=session.get('poll_chat_id') or config.attendance_poll_chat_id(),
         text=poll.build_poll_text(session, []),
         reply_markup=poll.build_keyboard(session_id),
-        message_thread_id=config.attendance_poll_topic_id(),
+        message_thread_id=(session['poll_topic_id'] or None) if 'poll_topic_id' in session else config.attendance_poll_topic_id(),
     )
-    db.set_poll_message_id(session_id, result["message_id"])
+    db.set_poll_message_id(session_id, result["message_id"], session.get('poll_chat_id') or config.attendance_poll_chat_id())
 
 
 def _enqueue_export(session_id: str) -> None:

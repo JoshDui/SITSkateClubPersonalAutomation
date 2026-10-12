@@ -97,6 +97,8 @@ resource "azurerm_linux_function_app" "main" {
     # Rules registry must be imported before enabling bookings in a new environment.
     BOOKINGS_ENABLED = "true"
     BOT_USERNAME     = "SITSkateClubBot"
+    # Explicit manual-only Thursday destination; never replaces SIT routing.
+    EIGHT_WHEEL_CHAT_ID = "-1002958151210"
     RULES_FORM_URL   = "https://forms.cloud.microsoft/r/Q9fETRjdMq"
 
     TABLE_MEMBERS   = azurerm_cosmosdb_table.members.name

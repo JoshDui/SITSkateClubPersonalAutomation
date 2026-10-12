@@ -138,12 +138,12 @@ def _build_attendees(responses: list[dict]) -> list[dict]:
         member = (db.get_member(handle) if handle else None) or {}
         enriched.append({
             "handle": handle,
-            "full_name": member.get("full_name"),
+            "full_name": member.get("full_name") or entry.get("first_name"),
             "student_id": member.get("student_id"),
             "full_course_name": member.get("full_course_name"),
             "cluster": member.get("cluster"),
             "year": member.get("year"),
-            "is_sit_student": bool(member.get("is_sit_student", 0)),
+            "is_sit_student": any(cat in ('sit_student', 'rental_skates') for cat in entry['categories']),
             "categories": entry["categories"],
         })
     return enriched

@@ -7,16 +7,25 @@ by `BOOKINGS_ENABLED=true`, `BOT_USERNAME=SITSkateClubBot`, and
 `RULES_FORM_URL=https://forms.cloud.microsoft/r/Q9fETRjdMq`.
 
 The registry is a separate rules acknowledgement dataset, not the trial/freshies
-registration sheet. Automatic SharePoint sync is not implemented. An admin must
-refresh the workbook snapshot after new form responses before they can qualify.
+registration sheet. Automatic SharePoint sync is not implemented. Imports now
+provide optional report enrichment; they are not a participation requirement.
 
 ## User flow
 
-The group retains SIT, non-SIT, and rental choices. Attendance requires an
-acknowledged, unambiguous registry match. The rental button opens the bot DM;
+Both groups retain SIT, non-SIT, and rental choices. As of 2026-09-28, attendance
+and rules-form completion are accepted on declaration, without registry matching.
+External participants must still complete the form; the bot does not verify it.
+Missing usernames, missing entries and ambiguous entries do not block participation.
+The rental button opens the bot DM;
 opening it does not register attendance. Rental eligibility requires a current
 SIT student declaration for each session. The old student/alumni form field is
 never used to authorize rentals. Alumni and external participants cannot rent.
+Selecting external attendance invalidates an older current-student declaration.
+Historical rules links and Check again buttons provide guidance, not verification.
+Existing open polls adopt this policy without recreation; new/refreshed poll
+text explains it. No existing bookings or previously exported reports are rewritten.
+New CSV and Excel reports derive student status from attendance/rental categories,
+not the registry; without a registry name they use the Telegram display name.
 
 EU35–45 buttons show exact and one-size-larger stock. Counts overlap and must not
 be summed. Exact size is preferred, +1 requires acceptance, and other sizes go
@@ -30,6 +39,38 @@ Initial inventory (pairs): 35=2, 36=0, 37=8, 38=1, 39=10, 40=9, 41=9,
 rentals are returned between non-overlapping sessions. No automatic downsizing.
 
 ## Admin operations (private chat)
+
+### Two-group trial (2026-09-27)
+
+- `/sendpoll` (or `/sendpoll SIT`) creates the upcoming Tuesday poll in the
+  existing SIT topic. `/sendpoll 8 Wheel Clan` creates the upcoming Thursday
+  poll in 8 Wheel Clan General. Names are case-insensitive; `8wheel` is an alias.
+  Unknown names fail closed. Each invocation creates a new session; do not repeat
+  the command to look up an existing booking. On the event day after its start
+  time, the command selects the following week.
+- Both use 18:30–21:30, SIT @ Punggol Coast, Asia/Singapore. Thursday posting
+  is manual only; the weekly scheduler considers only SIT sessions.
+- `/summary 8 Wheel Clan`, `/rentals 8 Wheel Clan`, `/skipsession 8 Wheel Clan`,
+  and `/sessions 8 Wheel Clan` select the Thursday group. Without a name these
+  select SIT. Pagination: `/sessions 8 Wheel Clan 2`. `/rentals SESSION_ID`
+  and `/deletesession SESSION_ID [CONFIRM]` still address one exact session.
+- To edit Thursday's latest session:
+  `/setsession 2026-10-01 18:30 21:30 SIT @ Punggol Coast --group 8 Wheel Clan`.
+  Existing `/setsession` syntax without `--group` remains SIT-only. This command
+  saves details but does not immediately refresh the old poll text.
+- Every new session snapshots group name/key, chat ID and topic (zero means
+  General). Replies, updates, links and deletion use its stored poll reference.
+  Historical sessions without a group key remain SIT; no bulk migration occurs.
+- Configure `EIGHT_WHEEL_CHAT_ID=-1002958151210` to enable the verified destination.
+  Leave it unset to disable new Thursday polls. Never repoint the existing SIT
+  secrets to the Thursday group. General omits `message_thread_id` entirely.
+- Attendance and reservations are independent per session; the same physical
+  60 pairs are assumed returned between Tuesday and Thursday. Do not create
+  overlapping events or duplicate polls that could independently reserve them.
+  This trial does not implement cross-event stock allocation or return tracking.
+- Declaration-based participation and the five-account admin allowlist are
+  shared. Real Thursday attendance uses the existing per-session CSV export;
+  CSV columns stay unchanged and each event has a distinct session ID/file.
 
 All admin commands require a numeric Telegram user ID in the Key Vault
 `admin-ids` allowlist and the sender's own private chat. Usernames, display
@@ -79,8 +120,8 @@ Existing messages/screenshots cannot be made secret retroactively.
 
 Imports upsert records, not full snapshot replacement: absent rows are not
 deleted/revoked. Changing a handle's name/student identity flags it as ambiguous
-and blocks automatic use, including on later reimports, pending administrator
-investigation. Full-name/ID spelling corrections can therefore need review.
+and blocks automatic identity linking, including on later reimports, pending
+administrator investigation. It does not block attendance or rentals.
 The first Telegram account matching an unclaimed username can claim it; the
 historical Excel form is not cryptographic proof of Telegram identity.
 
@@ -113,7 +154,7 @@ No masked NRIC or email fields are stored by this importer.
   one isolated booking row, which it removes afterward. No poll is sent.
 - Publish from `azure/functionapp` with
   `func azure functionapp publish skatebot-prod-azure-32441 --python --build remote`.
-- Enable settings only after registry and storage checks pass. Verify webhook
+- Registry counts are informational, not eligibility gates. Verify webhook
   rejects a missing secret and accepts an authenticated empty update.
 - User acceptance still requires a real Telegram rental click, size confirmation,
   visible poll update, and cancellation. Do not send unsolicited test group polls.

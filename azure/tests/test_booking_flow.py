@@ -58,12 +58,12 @@ def test_opening_dm_does_not_mark_attendance(setup):
     assert 'Choose your normal EU' in state['sent'][-1][1]
 
 
-def test_rules_missing_blocks_booking(setup):
+def test_rules_missing_does_not_block_declared_student_booking(setup):
     _, state, click, _ = setup
     state['ack'] = False
     click('book:0:38:38:1')
-    assert not state['value']['people']['42'].get('attendance')
-    assert 'rules acknowledgement' in state['sent'][-1][1]
+    assert state['value']['people']['42']['attendance'] == 'sit_student'
+    assert state['value']['people']['42']['rental']['allocated'] == 38
 
 
 def test_undeclared_student_cannot_book(setup):
@@ -109,13 +109,13 @@ def test_closed_session_rejects_bookings(setup):
     assert 'close when training starts' in state['sent'][-1][1]
 
 
-def test_group_attendance_requires_acknowledgement(setup):
+def test_group_external_attendance_trusts_declaration(setup):
     flow, state, _, _ = setup
     state['ack'] = False
     flow.attendance({'id': 'callback', 'from': USER, 'data': f'vote:{SID}:non_sit',
                      'message': {'chat': {'id': -100123}, 'message_id': 77}}, 1)
-    assert not state['value']['people']['42'].get('attendance')
-    assert 'rules_' in state['answers'][-1][1]['url']
+    assert state['value']['people']['42']['attendance'] == 'non_sit'
+    assert state['value']['people']['42']['current_student'] is False
 
 
 def test_copied_group_poll_is_rejected(setup):
@@ -185,3 +185,61 @@ def test_missing_poll_reference_reports_saved_booking_without_false_success(setu
     assert 'selection was saved' in state['sent'][-1][1]
     assert 'message reference is missing' in state['sent'][-1][1]
     assert not state['edits']
+
+
+@pytest.mark.parametrize('group,chat', [('sit', -1001593198353), ('8wheel', -1002958151210)])
+@pytest.mark.parametrize('category', ['sit_student', 'non_sit'])
+def test_no_registry_or_username_needed_for_either_group(setup, group, chat, category):
+    flow, state, _, shared = setup
+    shared.db.get_session(SID).update(group_key=group, poll_chat_id=chat)
+    def registry_must_not_be_called(user):
+        raise AssertionError('Registry must not gate attendance or rentals')
+    shared.booking_store.acknowledged_member = registry_must_not_be_called
+    user = {'id': 42, 'first_name': 'No username'}
+    cq = {'id': 'callback', 'from': user, 'data': f'vote:{SID}:{category}',
+          'message': {'chat': {'id': chat}, 'message_id': 77}}
+    flow.attendance(cq, 1)
+    assert state['value']['people']['42']['attendance'] == category
+    assert state['edits'][-1][0][0] == chat
+    flow.attendance(cq, 2)
+    assert state['value']['people']['42']['attendance'] is None
+
+
+@pytest.mark.parametrize('group', ['sit', '8wheel'])
+def test_unregistered_rental_flow_still_requires_declaration(setup, group):
+    flow, state, _, shared = setup
+    shared.db.get_session(SID)['group_key'] = group
+    shared.booking_store.acknowledged_member = lambda user: (_ for _ in ()).throw(AssertionError('Registry queried'))
+    state['value']['people'].clear()
+    user = {'id': 42, 'first_name': 'New member'}
+    def click(action, update):
+        flow.callback({'id': 'c', 'from': user, 'data': f'r:{SID}:{action}',
+                       'message': {'chat': {'type': 'private', 'id': 42}}}, update)
+    flow.start(user, SID)
+    assert 'currently enrolled' in state['sent'][-1][1]
+    click('book:0:38:38:1', 1)
+    assert not state['value']['people']
+    click('external', 2)
+    click('book:1:38:38:1', 3)
+    assert not state['value']['people']['42'].get('rental')
+    click('student', 4)
+    click('size:2:38', 5)
+    click('guards:2:38:38', 6)
+    click('book:2:38:38:1', 7)
+    assert state['value']['people']['42']['rental']['allocated'] == 38
+    click('cancelr:3', 8)
+    assert state['value']['people']['42']['attendance'] == 'sit_student'
+    assert not state['value']['people']['42'].get('rental')
+    click('cancela:4', 9)
+    assert state['value']['people']['42']['attendance'] is None
+
+
+def test_old_rules_links_and_check_buttons_do_not_claim_verification(setup):
+    flow, state, click, shared = setup
+    shared.booking_store.acknowledged_member = lambda user: (_ for _ in ()).throw(AssertionError('Registry queried'))
+    flow.start(USER, SID, rules_only=True)
+    click('check')
+    for text in [row[1] for row in state['sent']]:
+        assert 'acknowledgement found' not in text
+    assert 'without checking the registry' in state['sent'][-1][1]
+    assert shared.config.RULES_FORM_URL in str(state['sent'][-1][2])

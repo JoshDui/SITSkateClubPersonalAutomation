@@ -160,6 +160,8 @@ def create_session(
     end_time: str,
     location: str,
     created_at: str | None = None,
+    *, group_key: str = 'sit', group_name: str = 'SIT Inline Skate',
+    poll_chat_id: int | None = None, poll_topic_id: int | None = None,
 ) -> str:
     """Returns the new session's id (ULID)."""
     session_id = _new_ulid()
@@ -173,7 +175,12 @@ def create_session(
         "skipped": 0,
         "exported": 0,
         "created_at": created_at or _now_iso_utc(),
+        "group_key": group_key,
+        "group_name": group_name,
     }
+    if poll_chat_id is not None:
+        entity['poll_chat_id'] = EntityProperty(poll_chat_id, EdmType.INT64)
+        entity['poll_topic_id'] = EntityProperty(poll_topic_id or 0, EdmType.INT64)
     _sessions.create_entity(entity=entity)
     return session_id
 
@@ -209,18 +216,18 @@ def mark_session_deleted(session_id: str, admin_id: int) -> None:
     }, mode=UpdateMode.MERGE)
 
 
-def get_latest_session() -> dict | None:
+def get_latest_session(group_key: str = 'sit') -> dict | None:
     """Most recent session by session_date. Implementation differs from AWS:
     Cosmos Table API has no native sorting on non-key properties, so we scan
     the SESSION partition and pick the max client-side. Fine at our scale
     (~52 sessions/year)."""
-    items = list_sessions_for_admin()
+    items = [s for s in list_sessions_for_admin() if s.get('group_key', 'sit') == group_key]
     if not items:
         return None
     return items[0]
 
 
-def set_poll_message_id(session_id: str, message_id: int) -> None:
+def set_poll_message_id(session_id: str, message_id: int, chat_id: int | None = None) -> None:
     _sessions.upsert_entity(
         entity={
             "PartitionKey": _SESSION_PK,
@@ -228,7 +235,7 @@ def set_poll_message_id(session_id: str, message_id: int) -> None:
             "poll_message_id": EntityProperty(message_id, EdmType.INT64),
             # SDK defaults Python ints to INT32; supergroup IDs exceed its range.
             # https://learn.microsoft.com/python/api/azure-data-tables/azure.data.tables.entityproperty
-            "poll_chat_id": EntityProperty(config.attendance_poll_chat_id(), EdmType.INT64),
+            "poll_chat_id": EntityProperty(chat_id if chat_id is not None else config.attendance_poll_chat_id(), EdmType.INT64),
         },
         mode=UpdateMode.MERGE,
     )
@@ -297,7 +304,7 @@ def list_sessions_since(since_date: str, include_skipped: bool = False) -> list[
     return sorted(items, key=lambda r: r.get("session_date", ""))
 
 
-def get_upcoming_session(within_days: int = 7) -> dict | None:
+def get_upcoming_session(within_days: int = 7, group_key: str = 'sit') -> dict | None:
     """Any session (skipped or not) whose session_date is in [today, today+N].
     Includes skipped because an admin /skipsession is an explicit 'no session
     this week' — the cron must honor it."""
@@ -308,7 +315,8 @@ def get_upcoming_session(within_days: int = 7) -> dict | None:
         f"and session_date ge '{today.isoformat()}' "
         f"and session_date le '{end.isoformat()}'"
     )
-    items = [e for e in _sessions.query_entities(filt) if not e.get('deleted')]
+    items = [e for e in _sessions.query_entities(filt)
+             if not e.get('deleted') and e.get('group_key', 'sit') == group_key]
     if not items:
         return None
     earliest = min(items, key=lambda e: e.get("session_date", ""))
