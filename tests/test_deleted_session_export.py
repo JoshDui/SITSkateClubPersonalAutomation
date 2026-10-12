@@ -11,10 +11,14 @@ SESSION = {'id': 'test', 'session_date': '2099-01-01', 'start_time': '18:30', 'e
            'location': 'SIT @ Punggol Coast', 'group_name': 'SIT Inline Skate'}
 
 
-def load_exporter(monkeypatch, db, admins=(101, 102), send=None):
+def load_exporter(monkeypatch, db, admins=(101, 102), send=None, store=None):
     shared = types.ModuleType('shared')
     shared.config = types.SimpleNamespace(admin_ids=lambda: set(admins))
+    if hasattr(db, 'get_session'):
+        lookup = db.get_session
+        db.get_session = lambda sid, **kwargs: lookup(sid)  # Fakes ignore include_deleted.
     shared.db = db
+    shared.booking_store = store or types.SimpleNamespace(purge_event_pii=lambda sid: None)
     shared.telegram = types.SimpleNamespace(send_document=send or (lambda *a, **kw: {}))
     monkeypatch.setitem(sys.modules, 'shared', shared)
     spec = importlib.util.spec_from_file_location('exporter_test', EXPORTER)

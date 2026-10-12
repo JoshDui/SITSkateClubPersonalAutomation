@@ -19,7 +19,8 @@
 #   state     — point lookups by (pk, sk): pk=BOOKING/sk=session_id holds a
 #               session's booking document (conditional writes on `rev`),
 #               pk=TELEGRAM/sk=user_id a linked profile, pk=CLAIM/sk=username
-#               a registry handle claim. See shared/booking_store.py.
+#               a registry handle claim, pk=FORM/sk=user_id an in-progress
+#               special-event form (expires via TTL). See shared/booking_store.py.
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_dynamodb_table" "members" {
@@ -87,5 +88,13 @@ resource "aws_dynamodb_table" "state" {
   attribute {
     name = "sk"
     type = "S"
+  }
+
+  # In-progress forms (pk=FORM) carry an expiry epoch; DynamoDB deletes them
+  # after it passes, so abandoned special-event registrations do not keep the
+  # personal data typed so far. TTL deletes are free and use no write capacity.
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
   }
 }

@@ -33,8 +33,18 @@ def available(state, user_id=None):
     return stock
 
 
+def strip_event_pii(state):
+    """Copy of `state` without special-event form answers (names, student
+    numbers, masked IDs, year of study). Telegram display names stay so the
+    announcement and admin summaries keep working."""
+    result = deepcopy(state)
+    for person in result['people'].values():
+        person.pop('event_form', None)
+    return result
+
+
 def apply_action(state, user, action, update_id, *, version=None,
-                 requested=None, allocated=None, guards=False):
+                 requested=None, allocated=None, guards=False, form=None):
     """Apply one action to a copy, suitable for ETag compare-and-swap retries.
 
     Telegram retries reuse update_id. Per-user high-water marks prevent duplicate
@@ -64,6 +74,7 @@ def apply_action(state, user, action, update_id, *, version=None,
     elif action == 'cancel_attendance':
         person.pop('rental', None)
         person.pop('review', None)
+        person.pop('event_form', None)  # A withdrawn registrant's details are not kept.
         person['attendance'] = None
     elif action == 'declare_external':
         person['current_student'] = False
@@ -81,6 +92,22 @@ def apply_action(state, user, action, update_id, *, version=None,
             person['current_student'] = False
     elif action == 'review':
         person['review'] = 'Size/eligibility assistance requested'
+    elif action == 'event_register':
+        # Special events: SIT registrants are current students (rentals allowed);
+        # alumni attend with their own skates, so any earlier reservation is released.
+        if not form or form.get('category') not in ('sit', 'alumni'):
+            raise BookingError('Incomplete registration. Please start again.')
+        if form['category'] == 'sit':
+            person['attendance'] = 'sit_student'
+            person['current_student'] = True
+            if not form.get('skates'):
+                person.pop('rental', None)
+        else:
+            person['attendance'] = 'non_sit'
+            person['current_student'] = False
+            person.pop('rental', None)
+        person.pop('review', None)
+        person['event_form'] = dict(form)
     else:
         raise BookingError('Unknown booking action.')
     person.update(first_name=(user.get('first_name') or user.get('username') or uid)[:80],

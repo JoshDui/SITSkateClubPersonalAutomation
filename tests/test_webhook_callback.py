@@ -32,7 +32,7 @@ def _load_webhook(monkeypatch):
     poll = types.ModuleType("shared.poll")
     poll.CATEGORY_KEYS = ("sit_student", "non_sit", "rental_skates")
     poll.build_poll_text = lambda session, responses: "poll text"
-    poll.build_keyboard = lambda session_id: {"inline_keyboard": []}
+    poll.build_keyboard = lambda session_id, session=None: {"inline_keyboard": []}
 
     db = types.ModuleType("shared.db")
     db.toggle_response = lambda **kwargs: calls["toggles"].append(kwargs) or True
@@ -140,7 +140,7 @@ def test_admin_session_commands_dispatch_and_reject_nonadmins(monkeypatch):
     assert calls['commands'] == [('sessions', []), ('delete', ['01KSHRP2YPVJX1RBJ1DPJB8X8Z'])]
 
 
-ADMIN_COMMANDS = ('sessions', 'deletesession', 'rentals', 'linkmember',
+ADMIN_COMMANDS = ('sessions', 'deletesession', 'rentals', 'linkmember', 'specialevent',
                   'sendpoll', 'skipsession', 'setsession', 'summary', 'importmembers')
 
 

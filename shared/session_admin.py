@@ -120,6 +120,9 @@ def delete_session(msg, args):
     try:
         db.mark_session_deleted(sid, msg['from']['id'])
         booking_store.close_deleted_session(sid)
+        if session.get('kind') == 'event':
+            # Registration details are only kept for the CSV export.
+            booking_store.purge_event_pii(sid)
     except Exception:
         log.exception('Session deletion cleanup incomplete for %s', sid)
         telegram.send_message(chat_id, 'Deletion did not fully finish. The session may already be hidden. '

@@ -49,6 +49,23 @@ def state_for(sid):
     return store.read(sid) or rentals.initial_state(db.get_legacy_responses(sid))
 
 
+RENTAL_ACTIONS = ('menu', 'size', 'guards', 'book')
+
+
+def require_event_registration(session, user, sit_only=False):
+    """Special events collect details through the registration form
+    (shared/events.py); rentals and attendance must not bypass it. Rentals
+    are for registrants in the SIT category only."""
+    if session.get('kind') != 'event':
+        return
+    form = state_for(session['id'])['people'].get(str(user['id']), {}).get('event_form')
+    if not form:
+        raise rentals.BookingError('Please register for this event with the buttons on its '
+                                   'announcement first.')
+    if sit_only and form.get('category') != 'sit':
+        raise rentals.BookingError('Rental skates at this event are for SIT students only.')
+
+
 def eligible(user, sid, rental=True):
     # Both groups trust declarations. The optional registry is not an access gate.
     if rental and state_for(sid)['people'].get(str(user['id']), {}).get('current_student') is not True:
@@ -71,6 +88,7 @@ def rules_information(user, sid):
 
 def menu(user, sid):
     session = session_open(sid)
+    require_event_registration(session, user, sit_only=True)
     if not eligible(user, sid):
         return
     state = state_for(sid)
@@ -102,7 +120,7 @@ def refresh_poll(sid):
         before = db.get_responses(sid)
         telegram.edit_message_text(session.get('poll_chat_id') or config.attendance_poll_chat_id(),
                                    session['poll_message_id'], poll.build_poll_text(session, before),
-                                   poll.build_keyboard(sid))
+                                   poll.build_keyboard(sid, session))
         # A deletion can race with the HTTP edit after this function's initial
         # read. Do not leave a restored keyboard over the admin's closed notice.
         if db.get_session(sid) is None:
@@ -155,7 +173,13 @@ def callback(cq, update_id):
         # Retried updates can outlive Telegram's callback acknowledgement window.
         log.warning('Callback acknowledgement unavailable; continuing durable action')
     try:
-        session_open(sid)
+        session = session_open(sid)
+        if action not in ('cancelr', 'cancela'):
+            require_event_registration(session, user, sit_only=action in RENTAL_ACTIONS)
+            if session.get('kind') == 'event' and action in ('student', 'external'):
+                # The registration form already set the category.
+                raise rentals.BookingError('To change your category, cancel your registration '
+                                           'and register again.')
         if action == 'help':
             change(sid, user, 'review', update_id)
             send(user, 'Your request is in the admin review list. No pair has been reserved by this request.')
@@ -232,6 +256,8 @@ def attendance(cq, update_id):
     sid, category = parts[1:]
     try:
         session = session_open(sid)
+        if session.get('kind') == 'event':
+            raise rentals.BookingError('Please use the Register buttons on the event announcement.')
         message = cq.get('message') or {}
         if (message.get('chat', {}).get('id') != (session.get('poll_chat_id') or config.attendance_poll_chat_id())
                 or message.get('message_id') != session.get('poll_message_id')):

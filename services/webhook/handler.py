@@ -52,7 +52,7 @@ def lambda_handler(event: dict, context) -> dict:
         if "callback_query" in body:
             _handle_callback(body["callback_query"], body.get("update_id", -1))
         elif "message" in body:
-            _handle_message(body["message"])
+            _handle_message(body["message"], body.get("update_id", -1))
 
         return _resp(200, "ok")
     except Exception:
@@ -61,7 +61,7 @@ def lambda_handler(event: dict, context) -> dict:
         # things worse. We've logged the failure; the CloudWatch alarm will fire.
         # Booking taps are the exception: their writes are idempotent per
         # update_id, so a retry is how a failed poll refresh gets repaired.
-        is_booking = (locals().get('body', {}).get('callback_query', {}).get('data', '').startswith(('r:', 'vote:'))
+        is_booking = (locals().get('body', {}).get('callback_query', {}).get('data', '').startswith(('r:', 'vote:', 'e:'))
                       and getattr(config, 'BOOKINGS_ENABLED', False))
         return _resp(503 if is_booking else 200, "error-logged")
 
@@ -81,28 +81,45 @@ def _resp(code: int, body: str) -> dict:
 
 # ── Message dispatch (commands) ─────────────────────────────────────────────
 
-def _handle_message(msg: dict) -> None:
+def _handle_message(msg: dict, update_id: int = -1) -> None:
     text = (msg.get("text") or msg.get("caption") or "").strip()
     user = msg.get("from") or {}
     chat = msg.get("chat") or {}
     user_id = user.get("id")
+    own_dm = chat.get('type') == 'private' and chat.get('id') == user_id
+    bookings = getattr(config, 'BOOKINGS_ENABLED', False)
 
     if not text.startswith("/"):
+        # Answers to a special-event form (setup or registration) in the bot DM.
+        if bookings and own_dm and type(user_id) is int and not user.get('is_bot'):
+            from shared import events
+            events.handle_text(msg, update_id)
         return
 
     cmd, _, args_str = text.partition(" ")
     cmd = cmd.split("@", 1)[0].lstrip("/").lower()
     args = args_str.split() if args_str else []
 
-    if cmd == 'start' and getattr(config, 'BOOKINGS_ENABLED', False):
-        if chat.get('type') != 'private' or chat.get('id') != user_id:
+    if cmd == 'start' and bookings:
+        if not own_dm:
             return
         from shared import booking_flow
         if args and args[0].startswith(('rent_', 'rules_')):
             prefix, sid = args[0].split('_', 1)
             booking_flow.start(user, sid, rules_only=prefix == 'rules')
+        elif args and args[0].startswith(('evs_', 'eva_')):
+            from shared import events
+            prefix, sid = args[0].split('_', 1)
+            events.start_registration(user, sid, 'sit' if prefix == 'evs' else 'alumni')
         else:
             telegram.send_message(chat['id'], 'Use the rental button on your training session poll to book skates.')
+        return
+
+    if cmd == 'cancel' and bookings:
+        # Anyone can abandon their own form; it is not an admin command.
+        if own_dm:
+            from shared import events
+            events.cancel_form(user)
         return
 
     # Authorization uses Telegram's authenticated sender ID, never a handle,
@@ -176,6 +193,9 @@ def _cmd_skipsession(msg: dict, args: list[str]) -> None:
         telegram.send_message(msg["chat"]["id"], "No sessions found.")
         return
     db.mark_session_skipped(session["id"])
+    if session.get('kind') == 'event':
+        from shared import booking_store
+        booking_store.purge_event_pii(session["id"])  # No export will run for it.
     # The export schedule still fires; the exporter checks the skipped flag
     # and no-ops.
     telegram.send_message(
@@ -243,8 +263,11 @@ def _cmd_summary(msg: dict, args: list[str]) -> None:
         return
 
     labels = poll.category_labels()
+    if session.get('kind') == 'event':
+        labels = {'sit_student': 'SIT students', 'non_sit': 'Alumni', 'rental_skates': 'Rental skates'}
     lines = [
-        f"\U0001f4cb Summary — {session['session_date']} ({session['location']})",
+        f"\U0001f4cb Summary — {session.get('title') or session['session_date']} "
+        f"{session['session_date']} ({session['location']})",
         f"Session ID: {session['id']}",
         f"Group: {session.get('group_name', 'SIT Inline Skate')}",
         "",
@@ -370,6 +393,11 @@ def _cmd_deletesession(msg: dict, args: list[str]) -> None:
     session_admin.delete_session(msg, args)
 
 
+def _cmd_specialevent(msg: dict, args: list[str]) -> None:
+    from shared import events
+    events.begin_setup(msg)
+
+
 _COMMAND_HANDLERS = {
     "sessions": _cmd_sessions,
     "deletesession": _cmd_deletesession,
@@ -380,6 +408,7 @@ _COMMAND_HANDLERS = {
     "setsession": _cmd_setsession,
     "summary": _cmd_summary,
     "importmembers": _cmd_importmembers,
+    "specialevent": _cmd_specialevent,
 }
 
 
@@ -393,7 +422,10 @@ def _handle_callback(cq: dict, update_id: int = -1) -> None:
         if update_id < 0:
             telegram.answer_callback_query(cq['id'], 'Missing update identifier. Please try again.')
             return
-        if data.startswith('r:'):
+        if data.startswith('e:'):
+            from shared import events
+            events.callback(cq, update_id)
+        elif data.startswith('r:'):
             booking_flow.callback(cq, update_id)
         else:
             booking_flow.attendance(cq, update_id)
@@ -471,7 +503,7 @@ def _send_poll(session_id: str) -> None:
     result = telegram.send_message(
         chat_id=session.get('poll_chat_id') or config.attendance_poll_chat_id(),
         text=poll.build_poll_text(session, []),
-        reply_markup=poll.build_keyboard(session_id),
+        reply_markup=poll.build_keyboard(session_id, session),
         message_thread_id=(session['poll_topic_id'] or None) if 'poll_topic_id' in session else config.attendance_poll_topic_id(),
     )
     db.set_poll_message_id(session_id, result["message_id"], session.get('poll_chat_id') or config.attendance_poll_chat_id())

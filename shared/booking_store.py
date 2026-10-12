@@ -22,6 +22,12 @@ from shared import db, rentals
 BOOKING = 'BOOKING'
 PROFILE = 'TELEGRAM'
 CLAIM = 'CLAIM'
+FORM = 'FORM'
+
+# In-progress forms (special-event setup and registration) expire after this.
+# The same epoch is the table's TTL attribute, so abandoned forms, including
+# any personal data typed so far, are also deleted by DynamoDB itself.
+FORM_TTL_SECONDS = 30 * 60
 
 # DynamoDB items are capped at 400 KB. Fail before writing, never truncate.
 _MAX_PAYLOAD_BYTES = 350_000
@@ -86,6 +92,65 @@ def close_deleted_session(session_id):
     sees the marker on retry. Retained rentals are history, not active bookings.
     """
     return mutate(session_id, lambda state: {**state, 'deleted': True}, allow_deleted=True)
+
+
+def purge_event_pii(session_id):
+    """Remove special-event form answers once they are no longer needed
+    (after the CSV export, or when the event is skipped or deleted)."""
+    if read(session_id) is None:
+        return None
+    return mutate(session_id, rentals.strip_event_pii, allow_deleted=True)
+
+
+# ── In-progress forms ────────────────────────────────────────────────────────
+
+def get_form(user_id, now=None):
+    """The user's live form, or None if missing or expired. An expired form is
+    deleted on sight; DynamoDB's TTL can take up to two days to remove it."""
+    item = _get(FORM, str(user_id))
+    now = time.time() if now is None else now
+    if not item:
+        return None
+    if int(item['expires_at']) <= now:
+        delete_form(user_id)
+        return None
+    return {**json.loads(item['data']), 'rev': int(item['rev'])}
+
+
+def save_form(user_id, form, now=None):
+    """Store `form`, conditional on the revision it was read at (`form['rev']`,
+    absent for a new form). Returns False if a newer write won the race."""
+    now = time.time() if now is None else now
+    data = {k: v for k, v in form.items() if k != 'rev'}
+    rev = form.get('rev')
+    item = {'pk': FORM, 'sk': str(user_id), 'data': json.dumps(data, separators=(',', ':')),
+            'rev': 0 if rev is None else rev + 1, 'expires_at': int(now) + FORM_TTL_SECONDS}
+    params = {'Item': item}
+    if rev is not None:
+        params.update(ConditionExpression='#rev = :rev', ExpressionAttributeNames={'#rev': 'rev'},
+                      ExpressionAttributeValues={':rev': rev})
+    try:
+        db._state.put_item(**params)
+        return True
+    except ClientError as exc:
+        if not _conditional_failed(exc):
+            raise
+        return False
+
+
+def take_form(user_id, now=None):
+    """Atomically remove and return the live form, so only one of two
+    simultaneous confirmations acts on it."""
+    resp = db._state.delete_item(Key={'pk': FORM, 'sk': str(user_id)}, ReturnValues='ALL_OLD')
+    item = resp.get('Attributes')
+    now = time.time() if now is None else now
+    if not item or int(item['expires_at']) <= now:
+        return None
+    return json.loads(item['data'])
+
+
+def delete_form(user_id):
+    db._state.delete_item(Key={'pk': FORM, 'sk': str(user_id)})
 
 
 def profile(user_id):

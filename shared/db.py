@@ -183,8 +183,10 @@ def create_session(
     created_at: str | None = None,
     *, group_key: str = 'sit', group_name: str = 'SIT Inline Skate',
     poll_chat_id: int | None = None, poll_topic_id: int | None = None,
+    kind: str = 'training', title: str | None = None, details: str | None = None,
 ) -> str:
-    """Returns the new session's id (ULID)."""
+    """Returns the new session's id (ULID). Special events use kind='event'
+    with group_key='event', so they never count as a SIT training session."""
     session_id = _new_ulid()
     item = {
         "id": session_id,
@@ -197,7 +199,12 @@ def create_session(
         "created_at": created_at or _now_iso_utc(),
         "group_key": group_key,
         "group_name": group_name,
+        "kind": kind,
     }
+    if title:
+        item['title'] = title
+    if details:
+        item['details'] = details
     if poll_chat_id is not None:
         item['poll_chat_id'] = poll_chat_id
         item['poll_topic_id'] = poll_topic_id or 0
@@ -214,6 +221,11 @@ def get_session(session_id: str, *, include_deleted: bool = False) -> dict | Non
 
 def _visible_sessions() -> list[dict]:
     return [_to_dict(i) for i in _scan_all(_sessions, ConsistentRead=True) if not i.get('deleted')]
+
+
+def list_event_sessions() -> list[dict]:
+    """Every special event, including deleted ones (for the PII sweep)."""
+    return [_to_dict(i) for i in _scan_all(_sessions, ConsistentRead=True) if i.get('kind') == 'event']
 
 
 def list_sessions_for_admin() -> list[dict]:

@@ -10,6 +10,11 @@ If a SIT session already exists for the upcoming week (admin ran /sendpoll
 early, or /skipsession'd to cancel the week), this handler is a no-op, unless
 that session never got its poll (a failed earlier attempt), which is resumed.
 8 Wheel Clan sessions are manual-only and never suppress the SIT poll.
+
+Each run then sweeps special events: registration details (names, student
+numbers, partial NRIC/FIN) are removed from any event that is deleted,
+skipped, exported, or started more than SWEEP_AFTER_DAYS ago. This backs up
+the exporter's own purge (e.g. if every admin was unreachable).
 """
 from __future__ import annotations
 
@@ -17,15 +22,34 @@ import logging
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from shared import config, db, export_schedule, poll, telegram
+from shared import booking_store, config, db, export_schedule, poll, telegram
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 _TUESDAY_WEEKDAY = 1  # Python: Mon=0 ... Sun=6
+SWEEP_AFTER_DAYS = 3
 
 
 def lambda_handler(event: dict, context) -> dict:
+    result = _weekly_poll()
+    # After the poll, so a sweep failure never blocks it. A failure raises, and
+    # Lambda's retry finds the poll done (no-op) and re-runs the sweep.
+    _sweep_event_pii()
+    return result
+
+
+def _sweep_event_pii() -> None:
+    cutoff = datetime.now(ZoneInfo(config.TIMEZONE)) - timedelta(days=SWEEP_AFTER_DAYS)
+    for session in db.list_event_sessions():
+        starts = datetime.strptime(f"{session['session_date']} {session['start_time']}",
+                                   "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo(config.TIMEZONE))
+        if (session.get("deleted") or session.get("skipped") or session.get("exported")
+                or starts < cutoff):
+            booking_store.purge_event_pii(session["id"])
+
+
+def _weekly_poll() -> dict:
     try:
         existing = db.get_upcoming_session(within_days=7)
         if existing is not None:

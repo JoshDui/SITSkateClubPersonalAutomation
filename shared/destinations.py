@@ -10,14 +10,18 @@ def key(name=''):
         return 'sit'
     if normalized in ('8 wheel clan', '8wheel', '8 wheel clan 八轮族'):
         return '8wheel'
-    raise ValueError('Unknown group. Use SIT or 8 Wheel Clan. Nothing was sent or changed.')
+    if normalized in ('event', 'events', 'special event', 'special events'):
+        return 'event'
+    raise ValueError('Unknown group. Use SIT, 8 Wheel Clan or Events. Nothing was sent or changed.')
 
 
 def label(group_key):
-    return {'sit': 'SIT Inline Skate', '8wheel': '8 Wheel Clan'}[group_key]
+    return {'sit': 'SIT Inline Skate', '8wheel': '8 Wheel Clan', 'event': 'Special events'}[group_key]
 
 
 def route(group_key):
+    if group_key == 'event':
+        raise ValueError('Use /specialevent to create a special event. Nothing was sent.')
     if group_key == 'sit':
         return config.attendance_poll_chat_id(), config.attendance_poll_topic_id()
     if group_key != '8wheel':
