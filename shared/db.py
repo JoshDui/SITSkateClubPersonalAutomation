@@ -4,7 +4,7 @@ DynamoDB access layer for the skate bot.
 Tables (defined in infra/terraform/dynamodb.tf):
 
   members   — PK=username
-  sessions  — PK=id (ULID); GSI by_date (PK=gsi1_pk='SESSION', SK=session_date)
+  sessions  — PK=id (ULID)
   responses — PK=session_id, SK='{category}#{telegram_id}' (legacy vote rows)
   state     — PK=pk, SK=sk: booking documents, Telegram profiles and
               registry claims (see shared/booking_store.py)
@@ -13,10 +13,11 @@ Ported from the Azure Cosmos DB Table layer (azure/functionapp/shared/db.py).
 Public function signatures and semantics are unchanged so the platform-neutral
 modules (booking_flow, session_admin, ...) run as-is.
 
-Session listings use a strongly consistent paginated Scan rather than the
-by_date GSI: GSIs are eventually consistent, and a session created moments ago
-must be visible to the scheduler's "already exists" check and to admin
-commands. At ~52 sessions/year the scan costs a few read units.
+Session listings use a strongly consistent paginated Scan rather than a
+secondary index: indexes are eventually consistent, and a session created
+moments ago must be visible to the scheduler's "already exists" check and to
+admin commands. At ~52 sessions/year the scan costs a few read units, and no
+index keeps write capacity inside the provisioned free tier.
 """
 from __future__ import annotations
 
@@ -36,9 +37,6 @@ _members = _ddb.Table(config.TABLE_MEMBERS)
 _sessions = _ddb.Table(config.TABLE_SESSIONS)
 _responses = _ddb.Table(config.TABLE_RESPONSES)
 _state = _ddb.Table(config.TABLE_STATE)
-
-_SESSION_GSI_PK = "SESSION"
-
 
 def _unwrap(v: Any) -> Any:
     """Decimal → int/float; everything else unchanged."""
@@ -190,7 +188,6 @@ def create_session(
     session_id = _new_ulid()
     item = {
         "id": session_id,
-        "gsi1_pk": _SESSION_GSI_PK,
         "session_date": session_date,
         "start_time": start_time,
         "end_time": end_time,

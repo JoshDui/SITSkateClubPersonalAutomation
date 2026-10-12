@@ -1,9 +1,19 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# DynamoDB tables (on-demand billing — free tier: 25 GB + 25 WCU/RCU)
+# DynamoDB tables — PROVISIONED capacity inside the Always Free tier.
+#
+# Always Free covers 25 GB of storage plus 25 provisioned RCU and 25 provisioned
+# WCU in total across every table and index. On-demand (PAY_PER_REQUEST) is
+# billed per request with no free allowance, so it is not used here.
+#   Allocation (RCU / WCU): state 10/10, sessions 4/4, members 3/3,
+#   responses 2/2 → 19/19 of 25. Keep the total ≤ 25, and no auto-scaling or
+#   point-in-time recovery: both bill beyond the free tier.
+# Bursts are absorbed by DynamoDB's burst capacity (~5 minutes of unused
+# throughput); a throttled booking tap returns 503 and Telegram retries it.
 #
 # Access-pattern design notes:
 #   members   — point lookup by username (TG handle, lowercased)
-#   sessions  — point lookup by id (ULID); GSI for "upcoming within N days" range
+#   sessions  — point lookup by id (ULID); listings use a consistent Scan
+#               (a few dozen rows a year), so no secondary index is needed
 #   responses — query by session_id, optionally filtered to category prefix via
 #               composite SK "{category}#{telegram_id}" (BeginsWith-efficient)
 #   state     — point lookups by (pk, sk): pk=BOOKING/sk=session_id holds a
@@ -13,9 +23,11 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_dynamodb_table" "members" {
-  name         = "${local.prefix}-members"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "username"
+  name           = "${local.prefix}-members"
+  billing_mode   = "PROVISIONED"
+  read_capacity  = 3
+  write_capacity = 3
+  hash_key       = "username"
 
   attribute {
     name = "username"
@@ -23,46 +35,30 @@ resource "aws_dynamodb_table" "members" {
   }
 
   point_in_time_recovery {
-    enabled = false # Enable if you care about point-in-time restore; costs ~$0.20/GB-month after free tier
+    enabled = false # PITR is billed per GB-month; not in the free tier
   }
 }
 
 resource "aws_dynamodb_table" "sessions" {
-  name         = "${local.prefix}-sessions"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "id"
+  name           = "${local.prefix}-sessions"
+  billing_mode   = "PROVISIONED"
+  read_capacity  = 4
+  write_capacity = 4
+  hash_key       = "id"
 
   attribute {
     name = "id"
     type = "S"
   }
-
-  # GSI attributes — all items have a static GSI1PK so the GSI acts as a
-  # "sort-all-sessions-by-date" index. Hot-partition concern is moot at
-  # ~200 sessions/year.
-  attribute {
-    name = "gsi1_pk"
-    type = "S"
-  }
-
-  attribute {
-    name = "session_date"
-    type = "S"
-  }
-
-  global_secondary_index {
-    name            = "by_date"
-    hash_key        = "gsi1_pk"
-    range_key       = "session_date"
-    projection_type = "ALL"
-  }
 }
 
 resource "aws_dynamodb_table" "responses" {
-  name         = "${local.prefix}-responses"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "session_id"
-  range_key    = "sk" # Composite: "{category}#{telegram_id}"
+  name           = "${local.prefix}-responses"
+  billing_mode   = "PROVISIONED"
+  read_capacity  = 2
+  write_capacity = 2
+  hash_key       = "session_id"
+  range_key      = "sk" # Composite: "{category}#{telegram_id}"
 
   attribute {
     name = "session_id"
@@ -76,10 +72,12 @@ resource "aws_dynamodb_table" "responses" {
 }
 
 resource "aws_dynamodb_table" "state" {
-  name         = "${local.prefix}-state"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "pk"
-  range_key    = "sk"
+  name           = "${local.prefix}-state"
+  billing_mode   = "PROVISIONED"
+  read_capacity  = 10
+  write_capacity = 10
+  hash_key       = "pk"
+  range_key      = "sk"
 
   attribute {
     name = "pk"

@@ -33,7 +33,6 @@ data "aws_iam_policy_document" "ddb_rw_all_tables" {
     resources = [
       aws_dynamodb_table.members.arn,
       aws_dynamodb_table.sessions.arn,
-      "${aws_dynamodb_table.sessions.arn}/index/*",
       aws_dynamodb_table.responses.arn,
       aws_dynamodb_table.state.arn,
     ]

@@ -52,19 +52,7 @@ def ddb_tables(aws_env):
         ddb.create_table(
             TableName="skatebot-test-sessions",
             KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
-            AttributeDefinitions=[
-                {"AttributeName": "id", "AttributeType": "S"},
-                {"AttributeName": "gsi1_pk", "AttributeType": "S"},
-                {"AttributeName": "session_date", "AttributeType": "S"},
-            ],
-            GlobalSecondaryIndexes=[{
-                "IndexName": "by_date",
-                "KeySchema": [
-                    {"AttributeName": "gsi1_pk", "KeyType": "HASH"},
-                    {"AttributeName": "session_date", "KeyType": "RANGE"},
-                ],
-                "Projection": {"ProjectionType": "ALL"},
-            }],
+            AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
             BillingMode="PAY_PER_REQUEST",
         )
         ddb.create_table(
