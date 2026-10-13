@@ -34,10 +34,16 @@ resource "aws_sns_topic" "alarms" {
 # Alarm emails only (no AWS Budgets are created by this). SNS email delivery
 # is free up to 1,000 notifications a month.
 resource "aws_sns_topic_subscription" "alarms_email" {
-  count     = var.alarm_email == "" ? 0 : 1
+  for_each  = toset(var.alarm_emails)
   topic_arn = aws_sns_topic.alarms.arn
   protocol  = "email"
-  endpoint  = var.alarm_email
+  endpoint  = each.value
+}
+
+# Keep the first subscription when switching from a single address to a list.
+moved {
+  from = aws_sns_topic_subscription.alarms_email[0]
+  to   = aws_sns_topic_subscription.alarms_email["2402201@sit.singaporetech.edu.sg"]
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
