@@ -137,7 +137,9 @@ Since October 2025 a public (`AuthType NONE`) Lambda Function URL needs two
 resource-policy statements. AWS provider 5.x cannot express the second
 condition, so both are added with the CLI, for **each** public function:
 `skatebot-prod-webhook` (Telegram) and `skatebot-prod-webform` (QR-code
-sign-up pages). Re-run only if a function is ever recreated:
+sign-up pages). Re-run only if a function is ever recreated. AWS may already
+have created the first statement with the URL; a "statement id already exists"
+error just means that one is in place, so still run the second command:
 
 ```powershell
 foreach ($fn in "skatebot-prod-webhook", "skatebot-prod-webform") {
