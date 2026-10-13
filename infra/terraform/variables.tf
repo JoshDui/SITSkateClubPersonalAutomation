@@ -110,3 +110,9 @@ variable "webform_daily_request_alarm" {
   type        = number
   default     = 5000
 }
+
+variable "alarm_email" {
+  description = "Email for CloudWatch alarm notifications (Lambda errors, web form traffic). Set in terraform.tfvars (gitignored). Separate from budget_alert_email, which also creates AWS Budgets."
+  type        = string
+  default     = ""
+}
