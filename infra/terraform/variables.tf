@@ -104,3 +104,9 @@ variable "sit_group_topic_id" {
   type        = string
   default     = "3041"
 }
+
+variable "webform_daily_request_alarm" {
+  description = "Alarm when the public web form gets more requests than this in a day (club events see far fewer)."
+  type        = number
+  default     = 5000
+}

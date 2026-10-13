@@ -21,9 +21,11 @@ NAME_MAX = 80
 # Year of Study dropdown; 'Other' covers extended or part-time programmes.
 YEARS = {'1': 'Year 1', '2': 'Year 2', '3': 'Year 3', '4': 'Year 4', 'other': 'Other'}
 
-_MASKED_ID = re.compile(r'[STFGM]\d{3}[A-Z]')
-_FULL_ID = re.compile(r'[STFGM]\d{7}[A-Z]')
-_STUDENT_NUMBER = re.compile(r'\d{7}')
+# [0-9], not \d: \d also matches non-ASCII digits (e.g. Arabic-Indic), which
+# would slip past the duplicate checks and into the CSV.
+_MASKED_ID = re.compile(r'[STFGM][0-9]{3}[A-Z]')
+_FULL_ID = re.compile(r'[STFGM][0-9]{7}[A-Z]')
+_STUDENT_NUMBER = re.compile(r'[0-9]{7}')
 
 
 class FormError(ValueError):
@@ -113,6 +115,19 @@ def masked_id(text):
         raise FormError('Please send the first letter, the last 3 digits and the last letter '
                         'of your NRIC/FIN, e.g. T567D.')
     return value
+
+
+_HANDLE = re.compile(r'[A-Za-z][A-Za-z0-9_]{4,31}')
+
+
+def telegram_handle(text):
+    """Telegram username for web registrants (not verifiable; stored lowercase,
+    as Telegram usernames are case-insensitive)."""
+    value = (text or '').strip().lstrip('@')
+    if not _HANDLE.fullmatch(value):
+        raise FormError('Please enter your Telegram username, e.g. @skater_sg '
+                        '(5-32 letters, digits or underscores, starting with a letter).')
+    return value.lower()
 
 
 def year_of_study(key):

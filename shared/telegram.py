@@ -52,23 +52,17 @@ def send_message(
     )
 
 
-def send_document(
-    chat_id: int,
-    filename: str,
-    content: bytes,
-    caption: str | None = None,
-    mime_type: str = "text/csv",
-) -> dict:
-    """Upload a file as a document. Telegram requires multipart/form-data for
-    new uploads. API: https://core.telegram.org/bots/api#senddocument"""
+def _upload(method: str, field: str, chat_id: int, filename: str, content: bytes,
+            mime_type: str, caption: str | None) -> dict:
+    """New uploads must be multipart/form-data."""
     data = {"chat_id": str(chat_id)}
     if caption:
         data["caption"] = caption
     with httpx.Client(timeout=_DEFAULT_TIMEOUT) as client:
         r = client.post(
-            _API.format(token=config.bot_token(), method="sendDocument"),
+            _API.format(token=config.bot_token(), method=method),
             data=data,
-            files={"document": (filename, content, mime_type)},
+            files={field: (filename, content, mime_type)},
         )
     try:
         body = r.json()
@@ -76,8 +70,24 @@ def send_document(
         r.raise_for_status()
         raise
     if not body.get("ok"):
-        raise RuntimeError(f"Telegram sendDocument failed: {body}")
+        raise RuntimeError(f"Telegram {method} failed: {body}")
     return body["result"]
+
+
+def send_document(
+    chat_id: int,
+    filename: str,
+    content: bytes,
+    caption: str | None = None,
+    mime_type: str = "text/csv",
+) -> dict:
+    """Upload a file as a document. API: https://core.telegram.org/bots/api#senddocument"""
+    return _upload("sendDocument", "document", chat_id, filename, content, mime_type, caption)
+
+
+def send_photo(chat_id: int, filename: str, content: bytes, caption: str | None = None) -> dict:
+    """Upload a PNG as a photo. API: https://core.telegram.org/bots/api#sendphoto"""
+    return _upload("sendPhoto", "photo", chat_id, filename, content, "image/png", caption)
 
 
 def edit_message_text(

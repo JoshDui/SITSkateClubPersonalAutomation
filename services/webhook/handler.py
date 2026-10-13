@@ -398,6 +398,11 @@ def _cmd_specialevent(msg: dict, args: list[str]) -> None:
     events.begin_setup(msg)
 
 
+def _cmd_eventqr(msg: dict, args: list[str]) -> None:
+    from shared import events
+    events.qr_command(msg, args)
+
+
 _COMMAND_HANDLERS = {
     "sessions": _cmd_sessions,
     "deletesession": _cmd_deletesession,
@@ -409,6 +414,7 @@ _COMMAND_HANDLERS = {
     "summary": _cmd_summary,
     "importmembers": _cmd_importmembers,
     "specialevent": _cmd_specialevent,
+    "eventqr": _cmd_eventqr,
 }
 
 

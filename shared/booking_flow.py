@@ -33,16 +33,20 @@ def back_to_group(sid):
     return []
 
 
-def session_open(sid):
-    if not SESSION_ID.fullmatch(sid):
-        raise rentals.BookingError('Invalid session link.')
-    session = db.get_session(sid)
+def check_open(session):
+    """BookingError unless the (already loaded) session still takes bookings."""
     if not session or session.get('skipped') or session.get('exported'):
         raise rentals.BookingError('This session is closed or cancelled.')
     starts = datetime.fromisoformat(f"{session['session_date']}T{session['start_time']}").replace(tzinfo=ZoneInfo(config.TIMEZONE))
     if datetime.now(ZoneInfo(config.TIMEZONE)) >= starts:
         raise rentals.BookingError('Online booking changes close when training starts.')
     return session
+
+
+def session_open(sid):
+    if not SESSION_ID.fullmatch(sid):
+        raise rentals.BookingError('Invalid session link.')
+    return check_open(db.get_session(sid))
 
 
 def state_for(sid):

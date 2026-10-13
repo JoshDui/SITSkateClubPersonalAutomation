@@ -233,9 +233,53 @@ def _post(uid, nonce):
         return
     _send(uid, f"✅ Posted \"{d['title']}\" for {d['date']}.\nSession ID: {sid}\n\n"
                "Registrations: /summary Events\nRental skates: /rentals Events\n"
-               f"Remove it: /deletesession {sid}\n\n"
+               f"Web sign-up QR code: /eventqr {sid}\nRemove it: /deletesession {sid}\n\n"
                "The attendance CSV is sent to admins 24 hours after the event starts; "
                "registration details are then deleted from the bot.")
+    try:
+        send_qr(uid, db.get_session(sid))
+    except Exception:
+        log.warning('Could not send the QR code for event %s', sid)
+        _send(uid, f'The QR code could not be sent just now. Try /eventqr {sid}.')
+
+
+# ── Web registration links and QR codes ──────────────────────────────────────
+
+def web_link(session):
+    """The event's public sign-up URL, or None if the web form is not set up."""
+    base = (config.WEBFORM_BASE_URL or '').rstrip('/')
+    if not base:
+        return None
+    from shared import web_tokens
+    return f"{base}/e/{session['id']}?k={web_tokens.event_token(session['id'])}"
+
+
+def send_qr(chat_id, session):
+    link = web_link(session)
+    if not link:
+        _send(chat_id, 'Web registration is not available for this event.')
+        return
+    from shared import qr  # Only the webhook Lambda bundles segno.
+    caption = (f"{session.get('title') or 'Special event'} ({session['session_date']})\n"
+               f"Scan to register on the web, or open:\n{link}\n\n"
+               "Anyone with this link can register until the event starts.")
+    telegram.send_photo(chat_id, f"event-{session['session_date']}.png", qr.png(link), caption=caption)
+
+
+def qr_command(msg, args):
+    """/eventqr [SESSION_ID | Events]: resend an event's web sign-up QR code."""
+    chat_id = msg['chat']['id']
+    if len(args) == 1 and booking_flow.SESSION_ID.fullmatch(args[0]):
+        session = db.get_session(args[0])
+    elif not args or ' '.join(args).casefold() in ('event', 'events'):
+        session = db.get_latest_session('event')
+    else:
+        _send(chat_id, 'Usage: /eventqr SESSION_ID (or /eventqr for the latest event)')
+        return
+    if not session or session.get('kind') != 'event':
+        _send(chat_id, 'No special event found. Use /sessions Events to list them.')
+        return
+    send_qr(chat_id, session)
 
 
 def post_announcement(sid):

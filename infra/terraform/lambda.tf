@@ -54,7 +54,10 @@ resource "aws_lambda_function" "webhook" {
   memory_size      = var.lambda_memory_mb
 
   environment {
-    variables = merge(local.common_lambda_env, local.export_schedule_env)
+    variables = merge(local.common_lambda_env, local.export_schedule_env, {
+      # Public sign-up links in the /eventqr QR codes.
+      WEBFORM_BASE_URL = aws_lambda_function_url.webform.function_url
+    })
   }
 
   depends_on = [aws_cloudwatch_log_group.webhook]
@@ -149,4 +152,39 @@ resource "aws_lambda_permission" "allow_scheduler_invoke_exporter" {
   function_name = aws_lambda_function.exporter.function_name
   principal     = "scheduler.amazonaws.com"
   source_arn    = "arn:aws:scheduler:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:schedule/default/${local.prefix}-export-*"
+}
+
+# ── Web form (special-event registration via QR code) ────────────────────────
+# Public pages served by Lambda. Event and cancel links are HMAC tokens checked
+# before any database access, requests are rate limited per IP in memory, and
+# page data is cached per container, so junk traffic does not consume the
+# DynamoDB capacity the Telegram bot shares. The account's concurrency limit
+# is 10, which leaves no room to reserve concurrency for it; kill switch if
+# it is ever flooded (stops it instantly, free):
+#   aws lambda put-function-concurrency --function-name skatebot-prod-webform \
+#     --reserved-concurrent-executions 0
+
+resource "aws_lambda_function" "webform" {
+  function_name    = "${local.prefix}-webform"
+  role             = aws_iam_role.webform.arn
+  runtime          = var.python_runtime
+  handler          = "handler.lambda_handler"
+  filename         = "${local.dist_dir}/webform.zip"
+  source_code_hash = filebase64sha256("${local.dist_dir}/webform.zip")
+  timeout          = 15
+  memory_size      = 256
+
+  environment {
+    variables = local.common_lambda_env
+  }
+
+  depends_on = [aws_cloudwatch_log_group.webform]
+}
+
+# Public (AuthType NONE) like the webhook: needs the same two resource-policy
+# statements, added outside Terraform (SETUP.md "Function URL access").
+resource "aws_lambda_function_url" "webform" {
+  function_name      = aws_lambda_function.webform.function_name
+  authorization_type = "NONE"
+  invoke_mode        = "BUFFERED"
 }

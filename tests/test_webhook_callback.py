@@ -140,7 +140,7 @@ def test_admin_session_commands_dispatch_and_reject_nonadmins(monkeypatch):
     assert calls['commands'] == [('sessions', []), ('delete', ['01KSHRP2YPVJX1RBJ1DPJB8X8Z'])]
 
 
-ADMIN_COMMANDS = ('sessions', 'deletesession', 'rentals', 'linkmember', 'specialevent',
+ADMIN_COMMANDS = ('sessions', 'deletesession', 'rentals', 'linkmember', 'specialevent', 'eventqr',
                   'sendpoll', 'skipsession', 'setsession', 'summary', 'importmembers')
 
 

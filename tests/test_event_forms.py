@@ -26,7 +26,7 @@ def test_full_or_longer_ids_are_refused_with_a_warning(raw):
         ef.masked_id(raw)
 
 
-@pytest.mark.parametrize('raw', ['', 'A567D', 'T56D', 'T5678', '567D', 'TT67D'])
+@pytest.mark.parametrize('raw', ['', 'A567D', 'T56D', 'T5678', '567D', 'TT67D', 'T\u0665\u0666\u0667D'])
 def test_malformed_partial_ids_are_refused(raw):
     with pytest.raises(ef.FormError):
         ef.masked_id(raw)

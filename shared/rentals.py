@@ -36,10 +36,73 @@ def available(state, user_id=None):
 def strip_event_pii(state):
     """Copy of `state` without special-event form answers (names, student
     numbers, masked IDs, year of study). Telegram display names stay so the
-    announcement and admin summaries keep working."""
+    announcement and admin summaries keep working; web registrants' typed
+    (unverified) handles are removed too."""
     result = deepcopy(state)
     for person in result['people'].values():
-        person.pop('event_form', None)
+        form = person.pop('event_form', None) or {}
+        if form.get('source') == 'web':
+            person['first_name'], person['username'] = 'web registrant', None
+    return result
+
+
+def _identity_taken(people, form, exclude=None):
+    """Error text if another active registrant has the same student number
+    (SIT) or the same name and partial ID (alumni), else None."""
+    for key, other in people.items():
+        if key == exclude or not other.get('attendance'):
+            continue
+        other_form = other.get('event_form') or {}
+        if form['category'] == 'sit' and other_form.get('student_no') == form.get('student_no'):
+            return 'That student number is already registered for this event.'
+        if (form['category'] == 'alumni' and other_form.get('masked_id') == form.get('masked_id')
+                and other_form.get('name', '').casefold() == form['name'].casefold()):
+            return 'You are already registered for this event.'
+    return None
+
+
+EVENT_CAPACITY = 300
+
+
+def register_web(state, person_id, handle, form, *, rental=None):
+    """Add a web-form registrant to a special event (copy of `state`).
+
+    `person_id` is negative (Telegram user IDs are positive) and derived from
+    the form's submission ID, so a resubmitted form is idempotent. Refuses a
+    handle, student number or alumni identity that is already registered,
+    whether it came through Telegram or the web. `rental`, if given, is
+    {'requested', 'allocated', 'guards'} and obeys the training rules.
+    """
+    result = deepcopy(state)
+    people = result['people']
+    key = str(person_id)
+    if key in people:
+        if people[key].get('attendance'):
+            return result  # Same submission again.
+        # Replaying a form after its registration was cancelled must not re-register.
+        raise BookingError('This form was already used and then cancelled. Please open the form again.')
+    registered = [p for p in people.values() if p.get('attendance')]
+    if len(registered) >= EVENT_CAPACITY:
+        raise BookingError('This event is full.')
+    sit = form['category'] == 'sit'
+    if any((p.get('username') or '').lower() == handle for p in registered):
+        raise BookingError('That Telegram username is already registered for this event. If it is '
+                           'yours, register through the Telegram bot instead.')
+    if taken := _identity_taken(people, form):
+        raise BookingError(taken)
+    person = {'version': 1, 'attendance': 'sit_student' if sit else 'non_sit', 'current_student': sit,
+              'first_name': f'@{handle}', 'username': handle, 'last_update': 0,
+              'event_form': {**form, 'source': 'web'}}
+    if rental:
+        if not sit:
+            raise BookingError('Rental skates at this event are for SIT students only.')
+        requested, allocated = rental['requested'], rental['allocated']
+        if requested not in INVENTORY or allocated not in (requested, requested + 1):
+            raise BookingError('This size needs admin review.')
+        if allocated not in INVENTORY or available(result)[allocated] < 1:
+            raise BookingError('That pair is no longer available. Please choose again.')
+        person['rental'] = {'requested': requested, 'allocated': allocated, 'guards': bool(rental['guards'])}
+    people[key] = person
     return result
 
 
@@ -97,6 +160,8 @@ def apply_action(state, user, action, update_id, *, version=None,
         # alumni attend with their own skates, so any earlier reservation is released.
         if not form or form.get('category') not in ('sit', 'alumni'):
             raise BookingError('Incomplete registration. Please start again.')
+        if taken := _identity_taken(result['people'], form, exclude=uid):
+            raise BookingError(taken)
         if form['category'] == 'sit':
             person['attendance'] = 'sit_student'
             person['current_student'] = True

@@ -209,3 +209,67 @@ resource "aws_iam_role_policy" "scheduler_target_invoke" {
   role   = aws_iam_role.scheduler_target.id
   policy = data.aws_iam_policy_document.invoke_exporter.json
 }
+
+# ── Web form role ────────────────────────────────────────────────────────────
+
+resource "aws_iam_role" "webform" {
+  name               = "${local.prefix}-webform-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "webform_logs" {
+  role       = aws_iam_role.webform.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Least privilege for a public function: read sessions and legacy responses,
+# read/write only the state table (booking documents). No members table.
+data "aws_iam_policy_document" "webform_ddb" {
+  statement {
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query"]
+    resources = [aws_dynamodb_table.sessions.arn, aws_dynamodb_table.responses.arn]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.state.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "webform_ddb" {
+  name   = "ddb-webform"
+  role   = aws_iam_role.webform.id
+  policy = data.aws_iam_policy_document.webform_ddb.json
+}
+
+# Only the bot token (refreshing the group announcement) and the HMAC key
+# (event and cancel links); not admin IDs or anything else.
+data "aws_iam_policy_document" "webform_ssm" {
+  statement {
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      aws_ssm_parameter.bot_token.arn,
+      aws_ssm_parameter.webhook_secret.arn,
+    ]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"] # SSM SecureString default key (aws/ssm)
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${data.aws_region.current.name}.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "webform_ssm" {
+  name   = "ssm-read-webform"
+  role   = aws_iam_role.webform.id
+  policy = data.aws_iam_policy_document.webform_ssm.json
+}

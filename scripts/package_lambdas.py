@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVICES = ("webhook", "scheduler", "exporter")
+SERVICES = ("webhook", "scheduler", "exporter", "webform")
 
 
 def _add_tree(zf: zipfile.ZipFile, src: Path, prefix: str) -> None:

@@ -135,21 +135,33 @@ Admin authorization uses numeric Telegram IDs, never handles.
 
 Since October 2025 a public (`AuthType NONE`) Lambda Function URL needs two
 resource-policy statements. AWS provider 5.x cannot express the second
-condition, so both are added with the CLI (re-run only if the webhook function
-is ever recreated):
+condition, so both are added with the CLI, for **each** public function:
+`skatebot-prod-webhook` (Telegram) and `skatebot-prod-webform` (QR-code
+sign-up pages). Re-run only if a function is ever recreated:
 
 ```powershell
-aws lambda add-permission --function-name skatebot-prod-webhook `
-  --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl `
-  --principal "*" --function-url-auth-type NONE
-aws lambda add-permission --function-name skatebot-prod-webhook `
-  --statement-id FunctionURLInvokeAllowPublicAccess --action lambda:InvokeFunction `
-  --principal "*" --invoked-via-function-url
+foreach ($fn in "skatebot-prod-webhook", "skatebot-prod-webform") {
+  aws lambda add-permission --function-name $fn `
+    --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl `
+    --principal "*" --function-url-auth-type NONE
+  aws lambda add-permission --function-name $fn `
+    --statement-id FunctionURLInvokeAllowPublicAccess --action lambda:InvokeFunction `
+    --principal "*" --invoked-via-function-url
+}
 ```
 
-Check: a POST without the secret header must return **401** (the handler
-rejecting it). A **403** means the policy is still incomplete and Telegram
-cannot reach the bot. https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
+Checks: a webhook POST without the secret header returns **401**, and a web
+form GET of `/e/x` returns **404** (both are the handlers answering). A
+**403** means the policy is still incomplete.
+https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
+
+**Web form kill switch.** If the public sign-up pages are ever flooded, stop
+them instantly (free; the Telegram bot keeps working), and undo it later:
+
+```powershell
+aws lambda put-function-concurrency --function-name skatebot-prod-webform --reserved-concurrent-executions 0
+aws lambda delete-function-concurrency --function-name skatebot-prod-webform
+```
 
 ---
 

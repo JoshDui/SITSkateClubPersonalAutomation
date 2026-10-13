@@ -74,6 +74,7 @@ _EVENT_CSV_HEADERS = [
     "Event Date",
     "Event Time",
     "Event Location",
+    "Source",
 ]
 
 # Spreadsheet apps execute cells starting with these (CSV formula injection).
@@ -194,6 +195,9 @@ def _build_attendees(responses: list[dict]) -> list[dict]:
 def _build_event_rows(session: dict, state: dict) -> list[dict]:
     """One row per registrant, SIT students first, in registration order."""
     rows = []
+    # Telegram usernames are verified by Telegram; web-typed ones are not.
+    telegram_handles = {(p.get("username") or "").lower() for p in state["people"].values()
+                        if p.get("attendance") and (p.get("event_form") or {}).get("source") != "web"}
     for person in state["people"].values():
         category = {"sit_student": "SIT", "non_sit": "Alumni"}.get(person.get("attendance"))
         if not category:
@@ -202,6 +206,9 @@ def _build_event_rows(session: dict, state: dict) -> list[dict]:
         rental = person.get("rental") or {}
         sit = category == "SIT"
         remarks = "Programme not listed" if sit and form and not form.get("programme") else ""
+        if form.get("source") == "web" and (person.get("username") or "") in telegram_handles - {""}:
+            remarks = "; ".join(filter(None, [remarks, "Web-entered Telegram username matches a "
+                                                       "Telegram registrant: please check"]))
         rows.append({
             "Full Name": form.get("name") or person.get("first_name") or "",
             "Student ID": form.get("student_no") or "",
@@ -220,6 +227,7 @@ def _build_event_rows(session: dict, state: dict) -> list[dict]:
             "Event Date": session["session_date"],
             "Event Time": f"{session['start_time']} - {session['end_time']}",
             "Event Location": session["location"],
+            "Source": "Web" if form.get("source") == "web" else "Telegram",
             "_order": (not sit, person.get("last_update", 0)),
         })
     rows.sort(key=lambda row: row.pop("_order"))

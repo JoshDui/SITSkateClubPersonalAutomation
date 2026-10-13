@@ -33,6 +33,8 @@ BOOKINGS_ENABLED = os.environ.get("BOOKINGS_ENABLED", "false").lower() == "true"
 RULES_FORM_URL = os.environ.get("RULES_FORM_URL", "")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").lstrip("@")
 EIGHT_WHEEL_CHAT_ID = os.environ.get('EIGHT_WHEEL_CHAT_ID', '')
+# Public web-registration Lambda URL (ends with '/'); empty disables QR links.
+WEBFORM_BASE_URL = os.environ.get('WEBFORM_BASE_URL', '')
 
 # EventBridge Scheduler one-off schedules that fire the exporter 24h after a
 # session starts. Only the webhook and scheduler Lambdas set these.

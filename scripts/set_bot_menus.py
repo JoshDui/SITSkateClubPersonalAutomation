@@ -29,6 +29,7 @@ MEMBER_COMMANDS = [
 ADMIN_COMMANDS = MEMBER_COMMANDS + [
     ("sendpoll", "Create a new Tuesday session and post its group poll"),
     ("specialevent", "Create a one-off special event and post its sign-up"),
+    ("eventqr", "Resend a special event's web sign-up QR code"),
     ("sessions", "List sessions and IDs; add Events or a page number"),
     ("summary", "Show latest session attendance; add Events for events"),
     ("rentals", "Show rentals and remaining stock; optional session ID"),

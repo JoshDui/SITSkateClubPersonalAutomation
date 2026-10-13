@@ -34,3 +34,8 @@ output "ssm_parameter_names" {
     aws_ssm_parameter.admin_ids.name,
   ]
 }
+
+output "webform_url" {
+  description = "Public base URL of the special-event web form (links are /e/<session>?k=<token>)."
+  value       = aws_lambda_function_url.webform.function_url
+}
