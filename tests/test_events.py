@@ -138,6 +138,8 @@ def test_admin_creates_event_and_it_is_announced(env):
     announcement = next(m for m in env.tg['sent'] if m['chat_id'] == -100999)
     assert announcement['message_thread_id'] == 3041
     assert 'Halloween Skate' in announcement['text'] and 'Costumes encouraged' in announcement['text']
+    labels = [b['text'] for row in announcement['reply_markup']['inline_keyboard'] for b in row]
+    assert labels == ['Register: SIT student', 'Register: Alumni / External']
     links = [b['url'] for row in announcement['reply_markup']['inline_keyboard'] for b in row]
     assert links == [f"https://t.me/SITSkateClubBot?start=evs_{session['id']}",
                      f"https://t.me/SITSkateClubBot?start=eva_{session['id']}"]
@@ -241,7 +243,7 @@ def test_alumni_full_nric_is_rejected_deleted_and_never_stored(env):
     person = env.store.read(sid)['people'][str(ALUM)]
     assert person['attendance'] == 'non_sit' and person['current_student'] is False
     assert person['event_form'] == {'category': 'alumni', 'name': 'Lim Mei Ling', 'masked_id': 'T567D'}
-    assert 'Alumni: (1' in env.tg['edits'][-1][0][2]
+    assert 'Alumni / External: (1' in env.tg['edits'][-1][0][2]
 
 
 def test_rental_and_vote_paths_cannot_bypass_registration(env):
@@ -302,7 +304,7 @@ def test_export_sends_event_csv_then_deletes_details(env):
                            'Year of Study', 'Type of Participation', 'Remarks']  # OSE form order
     assert rows[1][:8] == ['1', 'Tan Ah Kow', '2402201', 'ICT', SOFTWARE_ENG, 'Year 2', 'Member', '']
     assert rows[1][8] == 'SIT' and rows[1][14] == 'Halloween Skate'
-    assert rows[2][:10] == ['2', 'Lim Mei Ling', '', '', '', 'Graduated', 'Member', '', 'Alumni', 'T567D']
+    assert rows[2][:10] == ['2', 'Lim Mei Ling', '', '', '', '', 'Member', '', 'Alumni / External', 'T567D']
     people = env.store.read(sid)['people']
     assert all('event_form' not in p for p in people.values())
     assert people[str(MEMBER)]['attendance'] == 'sit_student'  # Names/attendance stay.

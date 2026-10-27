@@ -199,7 +199,7 @@ def _build_event_rows(session: dict, state: dict) -> list[dict]:
     telegram_handles = {(p.get("username") or "").lower() for p in state["people"].values()
                         if p.get("attendance") and (p.get("event_form") or {}).get("source") != "web"}
     for person in state["people"].values():
-        category = {"sit_student": "SIT", "non_sit": "Alumni"}.get(person.get("attendance"))
+        category = {"sit_student": "SIT", "non_sit": "Alumni / External"}.get(person.get("attendance"))
         if not category:
             continue
         form = person.get("event_form") or {}
@@ -214,7 +214,7 @@ def _build_event_rows(session: dict, state: dict) -> list[dict]:
             "Student ID": form.get("student_no") or "",
             "Cluster": form.get("cluster") or "",
             "Degree Programme": form.get("programme") or "",
-            "Year of Study": form.get("year") or ("" if sit else "Graduated"),
+            "Year of Study": form.get("year") or "",  # Blank for alumni / external participants.
             "Type of Participation": "Member",
             "Remarks": remarks,
             "Category": category,

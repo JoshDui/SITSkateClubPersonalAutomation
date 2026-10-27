@@ -293,7 +293,7 @@ def _summary(person):
         lines.append(('Rental skates', f"EU {rental['allocated']} (requested EU {rental['requested']}), "
                       f"guards: {'yes' if rental['guards'] else 'no'}" if rental else 'No'))
     else:
-        lines.append(('Category', 'SIT alumnus'))
+        lines.append(('Category', 'Alumni / External'))
     return lines
 
 

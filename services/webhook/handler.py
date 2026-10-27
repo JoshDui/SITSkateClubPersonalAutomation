@@ -264,7 +264,7 @@ def _cmd_summary(msg: dict, args: list[str]) -> None:
 
     labels = poll.category_labels()
     if session.get('kind') == 'event':
-        labels = {'sit_student': 'SIT students', 'non_sit': 'Alumni', 'rental_skates': 'Rental skates'}
+        labels = {'sit_student': 'SIT students', 'non_sit': 'Alumni / External', 'rental_skates': 'Rental skates'}
     lines = [
         f"\U0001f4cb Summary — {session.get('title') or session['session_date']} "
         f"{session['session_date']} ({session['location']})",

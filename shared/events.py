@@ -38,7 +38,7 @@ SETUP_PROMPTS = {
     'location': 'Where is it held?',
     'details': f'Send the event details shown on the announcement (up to {ef.DETAILS_MAX} characters).',
 }
-CATEGORY_LABELS = {'sit': 'SIT student', 'alumni': 'Alumni'}
+CATEGORY_LABELS = {'sit': 'SIT student', 'alumni': 'Alumni / External'}
 NOT_LISTED = 'Programme not listed'
 EXPIRED = 'This form has expired or was replaced. Please start again.'
 
@@ -323,7 +323,7 @@ def start_registration(user, sid, category):
         return
     _send(uid, f'{intro}\n\nRegistering as: {CATEGORY_LABELS[category]}. '
                'Your details are only shared with the club committee (and campus security for '
-               'alumni) and are deleted from the bot after the event. Send /cancel at any time.')
+               'alumni and external participants) and are deleted from the bot after the event. Send /cancel at any time.')
     _prompt(uid, form)
 
 

@@ -59,10 +59,10 @@ def event_card(session):
 def landing(session, sit_url, alumni_url):
     return page(session.get('title') or 'Special event', event_card(session) + (
         '<div class="card"><h2>Register</h2>'
-        '<p>Club committee members use your details for attendance (and campus security for alumni). '
+        '<p>Club committee members use your details for attendance (and campus security for alumni and external participants). '
         'They are deleted from the bot after the event.</p>'
         f'<a class="button" href="{esc(sit_url)}">I am a current SIT student</a>'
-        f'<a class="button secondary" href="{esc(alumni_url)}">I am an SIT alumnus</a></div>'))
+        f'<a class="button secondary" href="{esc(alumni_url)}">I am an SIT alumnus or external participant</a></div>'))
 
 
 def _error(message):
@@ -146,7 +146,7 @@ def sit_form(session, action, submission, values, error, stock):
 
 def alumni_form(session, action, submission, values, error):
     v = values
-    body = event_card(session) + '<div class="card"><h2>Register as an SIT alumnus</h2>' + _error(error) + (
+    body = event_card(session) + '<div class="card"><h2>Register as an alumnus or external participant</h2>' + _error(error) + (
         f'<form method="post" action="{esc(action)}">{_common_hidden(submission)}'
         + _text('name', 'Full name', v.get('name', ''), autocomplete='name', maxlength=80, required='')
         + _text('masked_id', 'Partial NRIC/FIN for campus security', '',
@@ -155,7 +155,7 @@ def alumni_form(session, action, submission, values, error):
         + _text('handle', 'Telegram username', v.get('handle', ''), 'shown on the group announcement',
                 autocomplete='off', maxlength=33, placeholder='@username', required='')
         + '<button type="submit">Register</button></form></div>')
-    return page('Register: SIT alumnus', body)
+    return page('Register: Alumni / External', body)
 
 
 def registered(session, lines, cancel_url):

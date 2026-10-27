@@ -90,7 +90,7 @@ def build_event_text(session: dict, responses: list[dict]) -> str:
     if session.get('details'):
         lines += ["", session['details']]
     lines += ["", "Register with the buttons below (opens a private chat with the bot).", ""]
-    for cat_key, label in (('sit_student', 'SIT students'), ('non_sit', 'Alumni'),
+    for cat_key, label in (('sit_student', 'SIT students'), ('non_sit', 'Alumni / External'),
                            ('rental_skates', 'Rental skates')):
         names = by_cat[cat_key]
         lines.append(f"{label}: ({len(names)} \U0001f465)")
@@ -137,7 +137,7 @@ def build_keyboard(session_id: str, session: dict | None = None) -> dict:
         link = f"https://t.me/{config.BOT_USERNAME}?start="
         return {"inline_keyboard": [
             [{"text": "Register: SIT student", "url": f"{link}evs_{session_id}"}],
-            [{"text": "Register: Alumni", "url": f"{link}eva_{session_id}"}],
+            [{"text": "Register: Alumni / External", "url": f"{link}eva_{session_id}"}],
         ]}
     return {
         "inline_keyboard": [
